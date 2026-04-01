@@ -1,0 +1,121 @@
+@page "/watchlist"
+@using MediaBox2026.Services
+@using MediaBox2026.Models
+@inject MediaDatabase Db
+@inject MediaBoxState State
+@implements IDisposable
+
+<PageTitle>Movie Watchlist</PageTitle>
+
+<h2>📋 Movie Watchlist</h2>
+
+<div class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">Add Movie</h5>
+        <div class="input-group">
+            <input type="text" class="form-control" placeholder="Movie name (e.g. The Matrix 1999)" @bind="newMovie" @onkeyup="HandleKeyUp" />
+            <button class="btn btn-primary" @onclick="AddMovie">Add</button>
+        </div>
+    </div>
+</div>
+
+@if (watchlist.Count == 0)
+{
+    <div class="alert alert-info">Watchlist is empty. Add movies above to monitor YTS for downloads.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-striped">
+            <thead class="table-dark">
+                <tr>
+                    <th>Name</th>
+                    <th>Year</th>
+                    <th>Status</th>
+                    <th>Quality</th>
+                    <th>Added</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in watchlist)
+                {
+                    <tr>
+                        <td><strong>@item.Name</strong></td>
+                        <td>@(item.Year?.ToString() ?? "—")</td>
+                        <td>
+                            <span class="badge @GetStatusBadge(item.Status)">@item.Status</span>
+                        </td>
+                        <td>@(item.Quality ?? "—")</td>
+                        <td>@item.AddedDate.ToLocalTime().ToString("MMM dd, yyyy")</td>
+                        <td>
+                            @if (item.Status is WatchlistStatus.Pending or WatchlistStatus.AwaitingConfirmation)
+                            {
+                                <button class="btn btn-sm btn-danger" @onclick="() => RemoveItem(item)">Remove</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private List<WatchlistItem> watchlist = [];
+    private string newMovie = "";
+
+    protected override void OnInitialized()
+    {
+        LoadData();
+        State.OnChange += OnStateChanged;
+    }
+
+    private void LoadData() => watchlist = Db.Watchlist.FindAll().OrderByDescending(w => w.AddedDate).ToList();
+
+    private void AddMovie()
+    {
+        if (string.IsNullOrWhiteSpace(newMovie)) return;
+        var parsed = FileNameParser.Parse(newMovie);
+        Db.Watchlist.Insert(new WatchlistItem
+        {
+            Name = parsed.CleanName.Length > 0 ? parsed.CleanName : newMovie.Trim(),
+            Year = parsed.Year,
+            Status = WatchlistStatus.Pending,
+            AddedDate = DateTime.UtcNow
+        });
+        newMovie = "";
+        LoadData();
+        State.WatchlistCount = Db.Watchlist.Count(w => w.Status == WatchlistStatus.Pending);
+        State.NotifyChange();
+    }
+
+    private void RemoveItem(WatchlistItem item)
+    {
+        item.Status = WatchlistStatus.Cancelled;
+        Db.Watchlist.Update(item);
+        LoadData();
+        State.WatchlistCount = Db.Watchlist.Count(w => w.Status == WatchlistStatus.Pending);
+        State.NotifyChange();
+    }
+
+    private void HandleKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") AddMovie();
+    }
+
+    private static string GetStatusBadge(WatchlistStatus status) => status switch
+    {
+        WatchlistStatus.Pending => "bg-warning text-dark",
+        WatchlistStatus.Found => "bg-info",
+        WatchlistStatus.AwaitingConfirmation => "bg-primary",
+        WatchlistStatus.Downloading => "bg-success",
+        WatchlistStatus.Downloaded => "bg-secondary",
+        WatchlistStatus.Cancelled => "bg-danger",
+        _ => "bg-secondary"
+    };
+
+    private void OnStateChanged() => InvokeAsync(() => { LoadData(); StateHasChanged(); });
+
+    public void Dispose() => State.OnChange -= OnStateChanged;
+}

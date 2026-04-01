@@ -1,0 +1,129 @@
+﻿@page "/"
+@using MediaBox2026.Services
+@using MediaBox2026.Models
+@inject MediaBoxState State
+@inject MediaDatabase Db
+@implements IDisposable
+
+<PageTitle>MediaBox Dashboard</PageTitle>
+
+<h2 class="mb-4">🏠 MediaBox Dashboard</h2>
+
+<div class="row mb-4">
+    <div class="col-md-4 col-sm-6 mb-3">
+        <div class="card text-white bg-primary">
+            <div class="card-body">
+                <h5 class="card-title">📺 TV Shows</h5>
+                <h2>@State.TvShowCount</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 col-sm-6 mb-3">
+        <div class="card text-white bg-success">
+            <div class="card-body">
+                <h5 class="card-title">🎬 Movies</h5>
+                <h2>@State.MovieCount</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 col-sm-6 mb-3">
+        <div class="card text-white bg-info">
+            <div class="card-body">
+                <h5 class="card-title">📥 Active Downloads</h5>
+                <h2>@State.ActiveDownloads</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 col-sm-6 mb-3">
+        <div class="card text-white bg-warning">
+            <div class="card-body">
+                <h5 class="card-title">📋 Watchlist</h5>
+                <h2>@State.WatchlistCount</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 col-sm-6 mb-3">
+        <div class="card text-dark bg-light">
+            <div class="card-body">
+                <h5 class="card-title">📹 YouTube</h5>
+                <h2>@State.YouTubeCount</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 col-sm-6 mb-3">
+        <div class="card text-white bg-secondary">
+            <div class="card-body">
+                <h5 class="card-title">🔍 Last Scan</h5>
+                <h6>@(State.LastMediaScan?.ToString("g") ?? "Never")</h6>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card mb-3">
+            <div class="card-header"><strong>⏱️ Service Status</strong></div>
+            <div class="card-body">
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item d-flex justify-content-between">
+                        RSS Feed Monitor
+                        <span class="badge bg-success">Active</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        Transmission Monitor
+                        <span class="badge bg-success">Active</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        Download Organizer
+                        <span class="badge bg-success">Active</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        Movie Watchlist
+                        <span class="badge bg-success">Active</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        YouTube Scheduler
+                        <span class="badge bg-success">Active</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        Last RSS Check
+                        <span>@(State.LastRssCheck?.ToString("g") ?? "—")</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        Last News Download
+                        <span>@(State.LastNewsDownload?.ToString("g") ?? "—")</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card mb-3">
+            <div class="card-header"><strong>📝 Recent Activity</strong></div>
+            <div class="card-body" style="max-height: 350px; overflow-y: auto;">
+                @if (State.RecentActivity.Count == 0)
+                {
+                    <p class="text-muted">No recent activity.</p>
+                }
+                else
+                {
+                    <ul class="list-group list-group-flush">
+                        @foreach (var activity in State.RecentActivity.Take(20))
+                        {
+                            <li class="list-group-item py-1 small">@activity</li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    protected override void OnInitialized() => State.OnChange += OnStateChanged;
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => State.OnChange -= OnStateChanged;
+}

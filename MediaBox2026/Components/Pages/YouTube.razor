@@ -1,0 +1,78 @@
+@page "/youtube"
+@using MediaBox2026.Services
+@using MediaBox2026.Models
+@inject MediaDatabase Db
+@inject MediaBoxState State
+@implements IDisposable
+
+<PageTitle>YouTube</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>📹 YouTube (@filteredVideos.Count)</h2>
+    <input type="text" class="form-control w-25" placeholder="Search..." @bind="searchTerm" @bind:event="oninput" />
+</div>
+
+@if (State.LastNewsDownload.HasValue)
+{
+    <p class="text-muted">Last news download: @State.LastNewsDownload.Value.ToString("g")</p>
+}
+
+@if (filteredVideos.Count == 0)
+{
+    <div class="alert alert-info">No YouTube videos cataloged yet.</div>
+}
+else
+{
+    @foreach (var group in filteredVideos.GroupBy(v => v.Uploader).OrderBy(g => g.Key))
+    {
+        <div class="card mb-3">
+            <div class="card-header">
+                <strong>@group.Key</strong> (@group.Count() videos)
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Title</th>
+                                <th>File</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var video in group.OrderByDescending(v => v.CatalogedDate))
+                            {
+                                <tr>
+                                    <td>@video.Title</td>
+                                    <td class="text-muted small">@video.FileName</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    private List<YouTubeVideo> allVideos = [];
+    private string searchTerm = "";
+
+    private List<YouTubeVideo> filteredVideos => string.IsNullOrWhiteSpace(searchTerm)
+        ? allVideos
+        : allVideos.Where(v =>
+            v.Title.Contains(searchTerm, StringComparison.OrdinalIgnoreCase) ||
+            v.Uploader.Contains(searchTerm, StringComparison.OrdinalIgnoreCase)).ToList();
+
+    protected override void OnInitialized()
+    {
+        LoadData();
+        State.OnChange += OnStateChanged;
+    }
+
+    private void LoadData() => allVideos = Db.YouTubeVideos.FindAll().OrderByDescending(v => v.CatalogedDate).ToList();
+
+    private void OnStateChanged() => InvokeAsync(() => { LoadData(); StateHasChanged(); });
+
+    public void Dispose() => State.OnChange -= OnStateChanged;
+}

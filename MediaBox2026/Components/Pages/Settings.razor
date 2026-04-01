@@ -1,0 +1,263 @@
+@page "/settings"
+@using MediaBox2026.Services
+@using MediaBox2026.Models
+@using System.Text.Json
+@inject IWebHostEnvironment Env
+@inject MediaCatalogService Catalog
+@inject MediaBoxState State
+@inject IConfiguration Configuration
+
+<PageTitle>Settings</PageTitle>
+
+<h2>⚙️ Settings</h2>
+
+@if (!string.IsNullOrEmpty(message))
+{
+    <div class="alert @(isError ? "alert-danger" : "alert-success") alert-dismissible">
+        @message
+        <button type="button" class="btn-close" @onclick="() => message = null"></button>
+    </div>
+}
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card mb-3">
+            <div class="card-header"><strong>Telegram</strong></div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Bot Token</label>
+                    <input type="password" class="form-control" @bind="botToken" />
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Auth Password</label>
+                    <input type="password" class="form-control" @bind="authPassword" />
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header"><strong>Media Paths</strong></div>
+            <div class="card-body">
+                <div class="mb-2">
+                    <label class="form-label">TV Shows</label>
+                    <input type="text" class="form-control" @bind="tvShowsPath" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Movies</label>
+                    <input type="text" class="form-control" @bind="moviesPath" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Downloads</label>
+                    <input type="text" class="form-control" @bind="downloadsPath" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">YouTube</label>
+                    <input type="text" class="form-control" @bind="youtubePath" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Unknown</label>
+                    <input type="text" class="form-control" @bind="unknownPath" />
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card mb-3">
+            <div class="card-header"><strong>Transmission</strong></div>
+            <div class="card-body">
+                <div class="mb-2">
+                    <label class="form-label">RPC URL</label>
+                    <input type="text" class="form-control" @bind="transmissionUrl" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Username (optional)</label>
+                    <input type="text" class="form-control" @bind="transmissionUser" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Password (optional)</label>
+                    <input type="password" class="form-control" @bind="transmissionPass" />
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header"><strong>RSS &amp; YouTube</strong></div>
+            <div class="card-body">
+                <div class="mb-2">
+                    <label class="form-label">RSS Feed URL</label>
+                    <input type="text" class="form-control" @bind="rssFeedUrl" />
+                </div>
+                <hr />
+                <label class="form-label fw-bold">News Sources</label>
+                @for (var i = 0; i < newsSources.Count; i++)
+                {
+                    var idx = i;
+                    <div class="card mb-2">
+                        <div class="card-body p-2">
+                            <div class="mb-1">
+                                <label class="form-label small mb-0">URL</label>
+                                <input type="text" class="form-control form-control-sm" @bind="newsSources[idx].Url" />
+                            </div>
+                            <div class="mb-1">
+                                <label class="form-label small mb-0">Match Title</label>
+                                <input type="text" class="form-control form-control-sm" @bind="newsSources[idx].MatchTitle" />
+                            </div>
+                            <div class="row">
+                                <div class="col">
+                                    <label class="form-label small mb-0">Download Time</label>
+                                    <input type="text" class="form-control form-control-sm" @bind="newsSources[idx].DownloadTime" placeholder="19:45" />
+                                </div>
+                                <div class="col-auto d-flex align-items-end">
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => newsSources.RemoveAt(idx)">✕</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                }
+                <button class="btn btn-sm btn-outline-primary" @onclick="() => newsSources.Add(new())">+ Add Source</button>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header"><strong>Intervals</strong></div>
+            <div class="card-body">
+                <div class="mb-2">
+                    <label class="form-label">RSS Check (minutes)</label>
+                    <input type="number" class="form-control" @bind="rssMinutes" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Transmission Check (minutes)</label>
+                    <input type="number" class="form-control" @bind="transmissionMinutes" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Quality Wait (hours)</label>
+                    <input type="number" class="form-control" @bind="qualityHours" />
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="mb-3">
+    <button class="btn btn-primary me-2" @onclick="SaveSettings">💾 Save Settings</button>
+    <button class="btn btn-outline-secondary" @onclick="TriggerScanAsync">🔍 Run Media Scan</button>
+</div>
+
+@code {
+    private string? message;
+    private bool isError;
+
+    private string botToken = "";
+    private string authPassword = "";
+    private string tvShowsPath = "";
+    private string moviesPath = "";
+    private string downloadsPath = "";
+    private string youtubePath = "";
+    private string unknownPath = "";
+    private string transmissionUrl = "";
+    private string transmissionUser = "";
+    private string transmissionPass = "";
+    private string rssFeedUrl = "";
+    private List<NewsSource> newsSources = [];
+    private int rssMinutes;
+    private int transmissionMinutes;
+    private int qualityHours;
+
+    protected override void OnInitialized()
+    {
+        var section = Configuration.GetSection("MediaBox");
+        botToken = section["TelegramBotToken"] ?? "";
+        authPassword = section["AuthPassword"] ?? "changeme";
+        tvShowsPath = section["TvShowsPath"] ?? "/molecule/Media/TVShows";
+        moviesPath = section["MoviesPath"] ?? "/molecule/Media/Movies";
+        downloadsPath = section["DownloadsPath"] ?? "/molecule/Media/Downloads";
+        youtubePath = section["YouTubePath"] ?? "/molecule/Media/YouTube";
+        unknownPath = section["UnknownPath"] ?? "/molecule/Media/Unknown";
+        transmissionUrl = section["TransmissionRpcUrl"] ?? "http://localhost:9091/transmission/rpc";
+        transmissionUser = section["TransmissionUsername"] ?? "";
+        transmissionPass = section["TransmissionPassword"] ?? "";
+        rssFeedUrl = section["RssFeedUrl"] ?? "";
+        newsSources = Configuration.GetSection("MediaBox:NewsSources").Get<List<NewsSource>>() ?? [];
+        rssMinutes = int.TryParse(section["RssFeedCheckMinutes"], out var r) ? r : 30;
+        transmissionMinutes = int.TryParse(section["TransmissionCheckMinutes"], out var t) ? t : 5;
+        qualityHours = int.TryParse(section["QualityWaitHours"], out var q) ? q : 4;
+    }
+
+    private void SaveSettings()
+    {
+        try
+        {
+            var path = Path.Combine(Env.ContentRootPath, "appsettings.json");
+            var json = File.ReadAllText(path);
+            using var doc = JsonDocument.Parse(json);
+
+            var options = new JsonSerializerOptions { WriteIndented = true };
+            using var ms = new System.IO.MemoryStream();
+            using var writer = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true });
+
+            writer.WriteStartObject();
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (prop.Name == "MediaBox")
+                {
+                    writer.WriteStartObject("MediaBox");
+                    writer.WriteString("TelegramBotToken", botToken);
+                    writer.WriteString("AuthPassword", authPassword);
+                    writer.WriteString("TvShowsPath", tvShowsPath);
+                    writer.WriteString("MoviesPath", moviesPath);
+                    writer.WriteString("DownloadsPath", downloadsPath);
+                    writer.WriteString("YouTubePath", youtubePath);
+                    writer.WriteString("UnknownPath", unknownPath);
+                    writer.WriteString("TransmissionRpcUrl", transmissionUrl);
+                    writer.WriteString("TransmissionUsername", transmissionUser);
+                    writer.WriteString("TransmissionPassword", transmissionPass);
+                    writer.WriteString("RssFeedUrl", rssFeedUrl);
+                    writer.WritePropertyName("NewsSources");
+                    writer.WriteStartArray();
+                    foreach (var src in newsSources)
+                    {
+                        writer.WriteStartObject();
+                        writer.WriteString("Url", src.Url);
+                        writer.WriteString("MatchTitle", src.MatchTitle);
+                        writer.WriteString("DownloadTime", src.DownloadTime);
+                        writer.WriteEndObject();
+                    }
+                    writer.WriteEndArray();
+                    writer.WriteString("DatabasePath", "data/mediabox.db");
+                    writer.WriteNumber("RssFeedCheckMinutes", rssMinutes);
+                    writer.WriteNumber("TransmissionCheckMinutes", transmissionMinutes);
+                    writer.WriteNumber("QualityWaitHours", qualityHours);
+                    writer.WriteNumber("DownloadOrganizerMinutes", 10);
+                    writer.WriteNumber("WatchlistCheckHours", 6);
+                    writer.WriteNumber("MediaScanHours", 12);
+                    writer.WriteEndObject();
+                }
+                else
+                {
+                    prop.WriteTo(writer);
+                }
+            }
+            writer.WriteEndObject();
+            writer.Flush();
+
+            File.WriteAllBytes(path, ms.ToArray());
+            message = "Settings saved. Some changes may require a restart.";
+            isError = false;
+        }
+        catch (Exception ex)
+        {
+            message = $"Error saving settings: {ex.Message}";
+            isError = true;
+        }
+    }
+
+    private async Task TriggerScanAsync()
+    {
+        message = "Scanning media...";
+        isError = false;
+        StateHasChanged();
+        await Catalog.ScanAllAsync();
+        message = $"Scan complete! TV: {State.TvShowCount}, Movies: {State.MovieCount}, YouTube: {State.YouTubeCount}";
+    }
+}

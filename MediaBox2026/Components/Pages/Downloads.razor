@@ -1,0 +1,87 @@
+@page "/downloads"
+@using MediaBox2026.Services
+@using MediaBox2026.Models
+@inject TransmissionClient Transmission
+@inject MediaBoxState State
+@implements IDisposable
+
+<PageTitle>Downloads</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>📥 Downloads</h2>
+    <button class="btn btn-outline-primary btn-sm" @onclick="RefreshAsync">Refresh</button>
+</div>
+
+@if (loading)
+{
+    <div class="text-center py-4">
+        <div class="spinner-border" role="status"></div>
+        <p class="mt-2">Loading torrents...</p>
+    </div>
+}
+else if (torrents.Count == 0)
+{
+    <div class="alert alert-info">No active downloads.</div>
+}
+else
+{
+    <div class="row">
+        @foreach (var torrent in torrents)
+        {
+            <div class="col-12 mb-3">
+                <div class="card">
+                    <div class="card-body">
+                        <h6 class="card-title">@torrent.Name</h6>
+                        <div class="progress mb-2" style="height: 20px;">
+                            <div class="progress-bar @(torrent.IsFinished ? "bg-success" : "bg-primary progress-bar-striped progress-bar-animated")"
+                                 style="width: @((torrent.PercentDone * 100).ToString("F0"))%">
+                                @((torrent.PercentDone * 100).ToString("F1"))%
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-between text-muted small">
+                            <span>Status: @torrent.StatusText</span>
+                            <span>Size: @FormatSize(torrent.TotalSize)</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private List<TorrentInfo> torrents = [];
+    private bool loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAsync();
+        State.OnChange += OnStateChanged;
+    }
+
+    private async Task RefreshAsync()
+    {
+        loading = true;
+        try
+        {
+            torrents = await Transmission.GetTorrentsAsync();
+        }
+        catch
+        {
+            torrents = [];
+        }
+        loading = false;
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
+        return $"{bytes / (1024.0 * 1024 * 1024):F2} GB";
+    }
+
+    private async void OnStateChanged() => await InvokeAsync(async () => { await RefreshAsync(); StateHasChanged(); });
+
+    public void Dispose() => State.OnChange -= OnStateChanged;
+}

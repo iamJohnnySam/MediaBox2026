@@ -1,0 +1,84 @@
+using MediaBox2026.Components;
+using MediaBox2026.Models;
+using MediaBox2026.Services;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.WebHost.UseUrls("http://0.0.0.0:5000");
+
+// In-memory log sink for Blazor log viewer
+var logSink = new InMemoryLogSink();
+builder.Services.AddSingleton(logSink);
+builder.Logging.AddProvider(new InMemoryLoggerProvider(logSink));
+
+// Configuration
+builder.Services.Configure<MediaBoxSettings>(builder.Configuration.GetSection("MediaBox"));
+
+// Auto-detect OS and remap paths for Windows development vs Linux production
+builder.Services.PostConfigure<MediaBoxSettings>(settings =>
+{
+	if (OperatingSystem.IsWindows())
+	{
+		settings.TvShowsPath = RemapLinuxPath(settings.TvShowsPath);
+		settings.MoviesPath = RemapLinuxPath(settings.MoviesPath);
+		settings.DownloadsPath = RemapLinuxPath(settings.DownloadsPath);
+		settings.YouTubePath = RemapLinuxPath(settings.YouTubePath);
+		settings.UnknownPath = RemapLinuxPath(settings.UnknownPath);
+
+		if (settings.TransmissionRpcUrl.Contains("localhost") || settings.TransmissionRpcUrl.Contains("127.0.0.1"))
+			settings.TransmissionRpcUrl = "http://192.168.1.30:9091/transmission/rpc";
+
+		if (settings.YtDlpArchivePath.StartsWith("/"))
+			settings.YtDlpArchivePath = Path.Combine(
+				Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ytdl-archive.txt");
+	}
+
+	static string RemapLinuxPath(string path)
+	{
+		const string linuxPrefix = "/molecule/Media/";
+		if (path.StartsWith(linuxPrefix))
+			return @"M:\" + path[linuxPrefix.Length..].Replace('/', '\\');
+		return path;
+	}
+});
+
+// Core services
+builder.Services.AddSingleton<MediaDatabase>();
+builder.Services.AddSingleton<MediaBoxState>();
+builder.Services.AddSingleton<TransmissionClient>();
+builder.Services.AddSingleton<MediaCatalogService>();
+builder.Services.AddHttpClient();
+
+// Telegram bot (singleton + hosted service + ITelegramNotifier)
+builder.Services.AddSingleton<TelegramBotService>();
+builder.Services.AddSingleton<ITelegramNotifier>(sp => sp.GetRequiredService<TelegramBotService>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<TelegramBotService>());
+
+// Background services
+builder.Services.AddHostedService<MediaScannerService>();
+builder.Services.AddHostedService<RssFeedMonitorService>();
+builder.Services.AddHostedService<TransmissionMonitorService>();
+builder.Services.AddHostedService<DownloadOrganizerService>();
+builder.Services.AddHostedService<MovieWatchlistService>();
+builder.Services.AddHostedService<YouTubeDownloadService>();
+
+// Blazor
+builder.Services.AddRazorComponents()
+	.AddInteractiveServerComponents();
+
+var app = builder.Build();
+
+if (!app.Environment.IsDevelopment())
+{
+	app.UseExceptionHandler("/Error", createScopeForErrors: true);
+	app.UseHsts();
+}
+app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+
+app.UseAntiforgery();
+
+app.MapStaticAssets();
+app.MapRazorComponents<App>()
+	.AddInteractiveServerRenderMode();
+
+app.Run();

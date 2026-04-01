@@ -1,0 +1,65 @@
+@page "/movies"
+@using MediaBox2026.Services
+@using MediaBox2026.Models
+@inject MediaDatabase Db
+@inject MediaBoxState State
+@implements IDisposable
+
+<PageTitle>Movies</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>🎬 Movies (@filteredMovies.Count)</h2>
+    <input type="text" class="form-control w-25" placeholder="Search..." @bind="searchTerm" @bind:event="oninput" />
+</div>
+
+@if (filteredMovies.Count == 0)
+{
+    <div class="alert alert-info">No movies found. Run a media scan from Settings.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-striped table-hover">
+            <thead class="table-dark">
+                <tr>
+                    <th>Name</th>
+                    <th>Year</th>
+                    <th>File</th>
+                    <th>Path</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var movie in filteredMovies)
+                {
+                    <tr>
+                        <td><strong>@movie.Name</strong></td>
+                        <td>@(movie.Year?.ToString() ?? "—")</td>
+                        <td class="small">@movie.FileName</td>
+                        <td class="text-muted small">@movie.FolderPath</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private List<Movie> allMovies = [];
+    private string searchTerm = "";
+
+    private List<Movie> filteredMovies => string.IsNullOrWhiteSpace(searchTerm)
+        ? allMovies
+        : allMovies.Where(m => m.Name.Contains(searchTerm, StringComparison.OrdinalIgnoreCase)).ToList();
+
+    protected override void OnInitialized()
+    {
+        LoadData();
+        State.OnChange += OnStateChanged;
+    }
+
+    private void LoadData() => allMovies = Db.Movies.FindAll().OrderBy(m => m.Name).ToList();
+
+    private void OnStateChanged() => InvokeAsync(() => { LoadData(); StateHasChanged(); });
+
+    public void Dispose() => State.OnChange -= OnStateChanged;
+}

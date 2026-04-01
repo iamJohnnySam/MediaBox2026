@@ -1,0 +1,116 @@
+@page "/logs"
+@using MediaBox2026.Services
+@using MediaBox2026.Models
+@using Microsoft.Extensions.Logging
+@implements IDisposable
+@inject InMemoryLogSink LogSink
+
+<PageTitle>Logs</PageTitle>
+
+<h2>📋 Application Logs</h2>
+
+<div class="row mb-3">
+    <div class="col-auto">
+        <select class="form-select" @bind="selectedLevel">
+            <option value="">All Levels</option>
+            <option value="Information">Information</option>
+            <option value="Warning">Warning</option>
+            <option value="Error">Error</option>
+            <option value="Critical">Critical</option>
+        </select>
+    </div>
+    <div class="col-auto">
+        <input type="text" class="form-control" placeholder="Filter category..." @bind="categoryFilter" @bind:event="oninput" />
+    </div>
+    <div class="col-auto">
+        <button class="btn btn-outline-secondary" @onclick="Refresh">🔄 Refresh</button>
+    </div>
+</div>
+
+<div style="max-height: 75vh; overflow-y: auto; font-family: monospace; font-size: 0.85rem;">
+    <table class="table table-sm table-striped">
+        <thead class="table-dark sticky-top">
+            <tr>
+                <th style="width: 140px;">Time</th>
+                <th style="width: 80px;">Level</th>
+                <th style="width: 200px;">Category</th>
+                <th>Message</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var entry in filteredEntries)
+            {
+                <tr class="@GetRowClass(entry.Level)">
+                    <td>@entry.Timestamp.ToString("HH:mm:ss.fff")</td>
+                    <td>@entry.Level</td>
+                    <td title="@entry.Category">@ShortenCategory(entry.Category)</td>
+                    <td>
+                        @entry.Message
+                        @if (entry.Exception is not null)
+                        {
+                            <details class="mt-1">
+                                <summary class="text-danger">Exception</summary>
+                                <pre class="mb-0 small">@entry.Exception</pre>
+                            </details>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private string selectedLevel = "";
+    private string categoryFilter = "";
+    private List<LogEntry> filteredEntries = [];
+
+    protected override void OnInitialized()
+    {
+        LogSink.OnNewLog += OnLogReceived;
+        ApplyFilter();
+    }
+
+    private void OnLogReceived()
+    {
+        InvokeAsync(() =>
+        {
+            ApplyFilter();
+            StateHasChanged();
+        });
+    }
+
+    private void Refresh() => ApplyFilter();
+
+    private void ApplyFilter()
+    {
+        var entries = LogSink.GetEntries().AsEnumerable();
+
+        if (!string.IsNullOrEmpty(selectedLevel) && Enum.TryParse<LogLevel>(selectedLevel, out var level))
+            entries = entries.Where(e => e.Level >= level);
+
+        if (!string.IsNullOrWhiteSpace(categoryFilter))
+            entries = entries.Where(e => e.Category.Contains(categoryFilter, StringComparison.OrdinalIgnoreCase));
+
+        filteredEntries = entries.OrderByDescending(e => e.Timestamp).ToList();
+    }
+
+    private static string GetRowClass(LogLevel level) => level switch
+    {
+        LogLevel.Warning => "table-warning",
+        LogLevel.Error => "table-danger",
+        LogLevel.Critical => "table-danger fw-bold",
+        _ => ""
+    };
+
+    private static string ShortenCategory(string category)
+    {
+        var lastDot = category.LastIndexOf('.');
+        return lastDot >= 0 ? category[(lastDot + 1)..] : category;
+    }
+
+    public void Dispose()
+    {
+        LogSink.OnNewLog -= OnLogReceived;
+    }
+}
