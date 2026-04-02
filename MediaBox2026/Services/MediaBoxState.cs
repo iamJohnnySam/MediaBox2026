@@ -14,6 +14,12 @@ public class MediaBoxState
     public DateTime? LastNewsDownload { get; set; }
     public List<string> RecentActivity { get; set; } = [];
 
+    private readonly TaskCompletionSource _telegramReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public Task WaitForTelegramReadyAsync(CancellationToken ct) => _telegramReady.Task.WaitAsync(ct);
+
+    public void SignalTelegramReady() => _telegramReady.TrySetResult();
+
     public void AddActivity(string message)
     {
         RecentActivity.Insert(0, $"[{DateTime.Now:HH:mm}] {message}");

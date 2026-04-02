@@ -54,6 +54,7 @@ builder.Services.PostConfigure<MediaBoxSettings>(settings =>
 // Core services
 builder.Services.AddSingleton<MediaDatabase>();
 builder.Services.AddSingleton<MediaBoxState>();
+builder.Services.AddSingleton<TelegramAuthStore>();
 builder.Services.AddSingleton<TransmissionClient>();
 builder.Services.AddSingleton<JellyfinClient>();
 builder.Services.AddSingleton<MediaCatalogService>();

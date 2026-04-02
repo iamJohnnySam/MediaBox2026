@@ -15,7 +15,6 @@ public class MediaDatabase : IDisposable
     public ILiteCollection<WatchlistItem> Watchlist => _db.GetCollection<WatchlistItem>("watchlist");
     public ILiteCollection<PendingDownload> PendingDownloads => _db.GetCollection<PendingDownload>("pending");
     public ILiteCollection<ProcessedRssItem> ProcessedRssItems => _db.GetCollection<ProcessedRssItem>("rss_processed");
-    public ILiteCollection<TelegramSession> TelegramSessions => _db.GetCollection<TelegramSession>("telegram");
     public ILiteCollection<DispatchedEpisode> DispatchedEpisodes => _db.GetCollection<DispatchedEpisode>("dispatched");
 
     public MediaDatabase(IOptions<MediaBoxSettings> settings, ILogger<MediaDatabase> logger)
@@ -26,7 +25,7 @@ public class MediaDatabase : IDisposable
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase(dbPath);
+        _db = new LiteDatabase($"Filename={dbPath};Connection=Shared");
 
         // Repair scan-based collections that may have corrupted _id types from previous bugs.
         // These collections are fully rebuilt from the filesystem on every media scan.
@@ -71,40 +70,6 @@ public class MediaDatabase : IDisposable
             _db.DropCollection(name);
             _logger.LogWarning(ex, "Dropped unreadable collection '{Name}'. Data will be re-scanned.", name);
             return true;
-        }
-    }
-
-    public long? GetAuthenticatedChatId()
-    {
-        var session = TelegramSessions.FindOne(x => x.IsAuthenticated);
-        return session?.ChatId;
-    }
-
-    public void SetAuthenticatedChat(long chatId)
-    {
-        var existing = TelegramSessions.FindAll().ToList();
-        foreach (var s in existing)
-        {
-            s.IsAuthenticated = false;
-            TelegramSessions.Update(s);
-        }
-
-        var session = TelegramSessions.FindOne(x => x.ChatId == chatId);
-        if (session == null)
-        {
-            session = new TelegramSession
-            {
-                ChatId = chatId,
-                IsAuthenticated = true,
-                AuthenticatedDate = DateTime.UtcNow
-            };
-            TelegramSessions.Insert(session);
-        }
-        else
-        {
-            session.IsAuthenticated = true;
-            session.AuthenticatedDate = DateTime.UtcNow;
-            TelegramSessions.Update(session);
         }
     }
 

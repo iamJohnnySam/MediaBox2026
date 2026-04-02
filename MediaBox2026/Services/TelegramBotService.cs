@@ -19,6 +19,7 @@ public class TelegramBotService(
     MediaDatabase db,
     MediaCatalogService catalog,
     TransmissionClient transmission,
+    TelegramAuthStore authStore,
     MediaBoxState state,
     IOptionsMonitor<MediaBoxSettings> settings,
     ILogger<TelegramBotService> logger) : BackgroundService, ITelegramNotifier
@@ -40,7 +41,7 @@ public class TelegramBotService(
 
     public async Task SendPhotoAsync(string photoUrl, string caption, List<List<InlineButton>>? buttons = null, CancellationToken ct = default)
     {
-        var chatId = db.GetAuthenticatedChatId();
+        var chatId = authStore.GetChatId();
         if (chatId == null) return;
 
         var payload = new Dictionary<string, object>
@@ -63,7 +64,7 @@ public class TelegramBotService(
 
     public async Task SendMessageAsync(string text, CancellationToken ct = default)
     {
-        var chatId = db.GetAuthenticatedChatId();
+        var chatId = authStore.GetChatId();
         if (chatId == null)
         {
             logger.LogWarning("No authenticated Telegram chat. Message not sent: {Text}", text);
@@ -74,7 +75,7 @@ public class TelegramBotService(
 
     public async Task SendInlineKeyboardAsync(string text, List<List<InlineButton>> buttons, CancellationToken ct = default)
     {
-        var chatId = db.GetAuthenticatedChatId();
+        var chatId = authStore.GetChatId();
         if (chatId == null) return;
 
         var keyboard = buttons.Select(row =>
@@ -96,11 +97,34 @@ public class TelegramBotService(
         if (string.IsNullOrWhiteSpace(settings.CurrentValue.TelegramBotToken))
         {
             logger.LogWarning("Telegram bot token not configured. Bot service disabled.");
+            state.SignalTelegramReady();
             return;
         }
 
         logger.LogInformation("Telegram bot service starting...");
         await Task.Delay(2000, ct);
+
+        // Signal readiness immediately if a chat is already authenticated
+        if (authStore.GetChatId() != null)
+        {
+            logger.LogInformation("Telegram chat already authenticated. Signaling ready.");
+            state.SignalTelegramReady();
+        }
+        else
+        {
+            // Wait up to 3 minutes for someone to authenticate, then signal ready anyway
+            logger.LogInformation("Waiting up to 3 minutes for Telegram authentication...");
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromMinutes(3), ct);
+                    state.SignalTelegramReady();
+                    logger.LogWarning("Telegram auth timeout. Continuing without authenticated chat.");
+                }
+                catch (OperationCanceledException) { state.SignalTelegramReady(); }
+            }, ct);
+        }
 
         while (!ct.IsCancellationRequested)
         {
@@ -148,13 +172,14 @@ public class TelegramBotService(
         var chatId = chat.GetProperty("id").GetInt64();
         var text = msg.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
 
-        var authenticatedChat = db.GetAuthenticatedChatId();
+        var authenticatedChat = authStore.GetChatId();
 
         if (authenticatedChat != chatId)
         {
             if (text == settings.CurrentValue.AuthPassword)
             {
-                db.SetAuthenticatedChat(chatId);
+                authStore.SetChatId(chatId);
+                state.SignalTelegramReady();
                 await SendToChatAsync(chatId, "✅ Authenticated! You will now receive MediaBox notifications.", ct);
                 state.AddActivity("New Telegram chat authenticated");
                 logger.LogInformation("Telegram chat {ChatId} authenticated", chatId);
@@ -554,5 +579,11 @@ public class TelegramBotService(
     {
         public List<MovieSearchResult> Results { get; set; } = [];
         public int CurrentIndex { get; set; }
+    }
+
+    public override void Dispose()
+    {
+        _http.Dispose();
+        base.Dispose();
     }
 }

@@ -15,6 +15,8 @@ public class DownloadOrganizerService(
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        logger.LogInformation("Download organizer waiting for Telegram readiness...");
+        await state.WaitForTelegramReadyAsync(ct);
         await Task.Delay(TimeSpan.FromSeconds(45), ct);
         logger.LogInformation("Download organizer started");
 

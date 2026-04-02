@@ -15,6 +15,8 @@ public class MovieWatchlistService(
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        logger.LogInformation("Movie watchlist waiting for Telegram readiness...");
+        await state.WaitForTelegramReadyAsync(ct);
         await Task.Delay(TimeSpan.FromMinutes(2), ct);
         logger.LogInformation("Movie watchlist service started");
 

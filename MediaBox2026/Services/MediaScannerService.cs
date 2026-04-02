@@ -5,11 +5,14 @@ namespace MediaBox2026.Services;
 
 public class MediaScannerService(
     MediaCatalogService catalog,
+    MediaBoxState state,
     IOptionsMonitor<MediaBoxSettings> settings,
     ILogger<MediaScannerService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        logger.LogInformation("Media scanner waiting for Telegram readiness...");
+        await state.WaitForTelegramReadyAsync(ct);
         await Task.Delay(TimeSpan.FromSeconds(5), ct);
 
         try

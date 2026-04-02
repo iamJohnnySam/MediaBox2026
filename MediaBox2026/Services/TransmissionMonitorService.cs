@@ -12,6 +12,8 @@ public class TransmissionMonitorService(
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        logger.LogInformation("Transmission monitor waiting for Telegram readiness...");
+        await state.WaitForTelegramReadyAsync(ct);
         await Task.Delay(TimeSpan.FromSeconds(20), ct);
         logger.LogInformation("Transmission monitor started");
 

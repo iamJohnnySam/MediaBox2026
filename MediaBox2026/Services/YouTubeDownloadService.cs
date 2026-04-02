@@ -13,6 +13,8 @@ public class YouTubeDownloadService(
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        logger.LogInformation("YouTube download service waiting for Telegram readiness...");
+        await state.WaitForTelegramReadyAsync(ct);
         await Task.Delay(TimeSpan.FromSeconds(15), ct);
         logger.LogInformation("YouTube download service started");
 
@@ -102,6 +104,13 @@ public class YouTubeDownloadService(
 
         using var process = new Process { StartInfo = psi };
         process.Start();
+
+        // Kill the process tree if the application is shutting down
+        using var killReg = ct.Register(() =>
+        {
+            try { if (!process.HasExited) process.Kill(true); }
+            catch { }
+        });
 
         var output = await process.StandardOutput.ReadToEndAsync(ct);
         var error = await process.StandardError.ReadToEndAsync(ct);
