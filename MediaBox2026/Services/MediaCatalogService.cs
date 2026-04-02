@@ -43,56 +43,59 @@ public class MediaCatalogService(
 
         foreach (var dir in Directory.GetDirectories(path))
         {
-            var folderName = Path.GetFileName(dir);
-            var (name, year) = FileNameParser.ParseFolderName(folderName);
+            try
+            {
+                var folderName = Path.GetFileName(dir);
+                var (name, year) = FileNameParser.ParseFolderName(folderName);
 
-            var show = db.TvShows.FindOne(s => s.FolderPath == dir);
-            if (show == null)
-            {
-                show = new TvShow
+                var show = db.TvShows.FindOne(s => s.FolderPath == dir);
+                if (show != null && show.Id == 0)
                 {
-                    Name = name,
-                    Year = year,
-                    FolderPath = dir,
-                    Episodes = [],
-                    LastScanned = DateTime.UtcNow
-                };
-                db.TvShows.Insert(show);
-            }
-            else
-            {
+                    db.TvShows.DeleteMany(s => s.FolderPath == dir);
+                    show = null;
+                }
+                var isNew = show == null;
+                show ??= new TvShow { FolderPath = dir, Episodes = [] };
+
                 show.Name = name;
                 show.Year = year;
                 show.LastScanned = DateTime.UtcNow;
-            }
 
-            show.Episodes.Clear();
-            var files = Directory.GetFiles(dir, "*.*", SearchOption.AllDirectories)
-                .Where(f => FileNameParser.IsMediaFile(f) || FileNameParser.IsSubtitleFile(f));
+                show.Episodes.Clear();
+                var files = Directory.GetFiles(dir, "*.*", SearchOption.AllDirectories)
+                    .Where(f => FileNameParser.IsMediaFile(f) || FileNameParser.IsSubtitleFile(f));
 
-            foreach (var file in files)
-            {
-                var parsed = FileNameParser.Parse(Path.GetFileName(file));
-                if (parsed.Season.HasValue && parsed.Episode.HasValue)
+                foreach (var file in files)
                 {
-                    show.Episodes.Add(new EpisodeInfo
+                    var parsed = FileNameParser.Parse(Path.GetFileName(file));
+                    if (parsed.Season.HasValue && parsed.Episode.HasValue)
                     {
-                        Season = parsed.Season.Value,
-                        Episode = parsed.Episode.Value,
-                        FileName = Path.GetFileName(file)
-                    });
+                        show.Episodes.Add(new EpisodeInfo
+                        {
+                            Season = parsed.Season.Value,
+                            Episode = parsed.Episode.Value,
+                            FileName = Path.GetFileName(file)
+                        });
+                    }
                 }
-            }
 
-            if (show.Episodes.Count > 0)
+                if (show.Episodes.Count > 0)
+                {
+                    show.LatestSeason = show.Episodes.Max(e => e.Season);
+                    show.LatestEpisode = show.Episodes
+                        .Where(e => e.Season == show.LatestSeason)
+                        .Max(e => e.Episode);
+                }
+
+                if (isNew)
+                    db.TvShows.Insert(show);
+                else
+                    db.TvShows.Update(show);
+            }
+            catch (Exception ex)
             {
-                show.LatestSeason = show.Episodes.Max(e => e.Season);
-                show.LatestEpisode = show.Episodes
-                    .Where(e => e.Season == show.LatestSeason)
-                    .Max(e => e.Episode);
+                logger.LogError(ex, "Error scanning TV show folder: {Dir}", dir);
             }
-
-            db.TvShows.Update(show);
         }
     }
 
@@ -103,34 +106,45 @@ public class MediaCatalogService(
 
         foreach (var dir in Directory.GetDirectories(path))
         {
-            var folderName = Path.GetFileName(dir);
-            var (name, year) = FileNameParser.ParseFolderName(folderName);
-
-            var mediaFile = Directory.GetFiles(dir, "*.*", SearchOption.AllDirectories)
-                .FirstOrDefault(f => FileNameParser.IsMediaFile(f));
-
-            if (mediaFile == null) continue;
-
-            var movie = db.Movies.FindOne(m => m.FolderPath == dir);
-            if (movie == null)
+            try
             {
-                movie = new Movie
+                var folderName = Path.GetFileName(dir);
+                var (name, year) = FileNameParser.ParseFolderName(folderName);
+
+                var mediaFile = Directory.GetFiles(dir, "*.*", SearchOption.AllDirectories)
+                    .FirstOrDefault(f => FileNameParser.IsMediaFile(f));
+
+                if (mediaFile == null) continue;
+
+                var movie = db.Movies.FindOne(m => m.FolderPath == dir);
+                if (movie != null && movie.Id == 0)
                 {
-                    Name = name,
-                    Year = year,
-                    FolderPath = dir,
-                    FileName = Path.GetFileName(mediaFile),
-                    LastScanned = DateTime.UtcNow
-                };
-                db.Movies.Insert(movie);
+                    db.Movies.DeleteMany(m => m.FolderPath == dir);
+                    movie = null;
+                }
+                if (movie == null)
+                {
+                    db.Movies.Insert(new Movie
+                    {
+                        Name = name,
+                        Year = year,
+                        FolderPath = dir,
+                        FileName = Path.GetFileName(mediaFile),
+                        LastScanned = DateTime.UtcNow
+                    });
+                }
+                else
+                {
+                    movie.Name = name;
+                    movie.Year = year;
+                    movie.FileName = Path.GetFileName(mediaFile);
+                    movie.LastScanned = DateTime.UtcNow;
+                    db.Movies.Update(movie);
+                }
             }
-            else
+            catch (Exception ex)
             {
-                movie.Name = name;
-                movie.Year = year;
-                movie.FileName = Path.GetFileName(mediaFile);
-                movie.LastScanned = DateTime.UtcNow;
-                db.Movies.Update(movie);
+                logger.LogError(ex, "Error scanning movie folder: {Dir}", dir);
             }
         }
     }
@@ -145,20 +159,27 @@ public class MediaCatalogService(
             var uploader = Path.GetFileName(uploaderDir);
             foreach (var file in Directory.GetFiles(uploaderDir, "*.*", SearchOption.AllDirectories))
             {
-                if (!FileNameParser.IsMediaFile(file)) continue;
-
-                var fileName = Path.GetFileName(file);
-                var existing = db.YouTubeVideos.FindOne(v => v.FilePath == file);
-                if (existing != null) continue;
-
-                db.YouTubeVideos.Insert(new YouTubeVideo
+                try
                 {
-                    Uploader = uploader,
-                    Title = Path.GetFileNameWithoutExtension(fileName),
-                    FileName = fileName,
-                    FilePath = file,
-                    CatalogedDate = DateTime.UtcNow
-                });
+                    if (!FileNameParser.IsMediaFile(file)) continue;
+
+                    var fileName = Path.GetFileName(file);
+                    var existing = db.YouTubeVideos.FindOne(v => v.FilePath == file);
+                    if (existing != null) continue;
+
+                    db.YouTubeVideos.Insert(new YouTubeVideo
+                    {
+                        Uploader = uploader,
+                        Title = Path.GetFileNameWithoutExtension(fileName),
+                        FileName = fileName,
+                        FilePath = file,
+                        CatalogedDate = DateTime.UtcNow
+                    });
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error scanning YouTube file: {File}", file);
+                }
             }
         }
     }

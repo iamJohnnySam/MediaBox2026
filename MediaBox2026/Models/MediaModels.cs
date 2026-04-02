@@ -50,6 +50,9 @@ public class WatchlistItem
     public DateTime AddedDate { get; set; }
     public string? TorrentUrl { get; set; }
     public string? Quality { get; set; }
+    public string? ImdbCode { get; set; }
+    public string? PosterUrl { get; set; }
+    public string? TrailerCode { get; set; }
 }
 
 public enum WatchlistStatus
@@ -150,6 +153,11 @@ public class MediaBoxSettings
     public string TransmissionRpcUrl { get; set; } = "http://localhost:9091/transmission/rpc";
     public string? TransmissionUsername { get; set; }
     public string? TransmissionPassword { get; set; }
+
+    public string JellyfinUrl { get; set; } = "";
+    public string JellyfinApiKey { get; set; } = "";
+
+    public string CrashDataPath { get; set; } = "/molecule/Media/MediaBox/crashes";
 
     public string RssFeedUrl { get; set; } = "https://episodefeed.com/rss/129/477500a959d617288def89205dd3d6bacf97380e";
 

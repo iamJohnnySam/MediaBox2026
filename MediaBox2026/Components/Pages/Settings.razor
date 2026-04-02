@@ -82,6 +82,20 @@
         </div>
 
         <div class="card mb-3">
+            <div class="card-header"><strong>Jellyfin</strong></div>
+            <div class="card-body">
+                <div class="mb-2">
+                    <label class="form-label">Server URL</label>
+                    <input type="text" class="form-control" @bind="jellyfinUrl" placeholder="http://localhost:8096" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">API Key</label>
+                    <input type="password" class="form-control" @bind="jellyfinApiKey" />
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-3">
             <div class="card-header"><strong>RSS &amp; YouTube</strong></div>
             <div class="card-body">
                 <div class="mb-2">
@@ -158,6 +172,8 @@
     private string transmissionUrl = "";
     private string transmissionUser = "";
     private string transmissionPass = "";
+    private string jellyfinUrl = "";
+    private string jellyfinApiKey = "";
     private string rssFeedUrl = "";
     private List<NewsSource> newsSources = [];
     private int rssMinutes;
@@ -177,6 +193,8 @@
         transmissionUrl = section["TransmissionRpcUrl"] ?? "http://localhost:9091/transmission/rpc";
         transmissionUser = section["TransmissionUsername"] ?? "";
         transmissionPass = section["TransmissionPassword"] ?? "";
+        jellyfinUrl = section["JellyfinUrl"] ?? "";
+        jellyfinApiKey = section["JellyfinApiKey"] ?? "";
         rssFeedUrl = section["RssFeedUrl"] ?? "";
         newsSources = Configuration.GetSection("MediaBox:NewsSources").Get<List<NewsSource>>() ?? [];
         rssMinutes = int.TryParse(section["RssFeedCheckMinutes"], out var r) ? r : 30;
@@ -188,11 +206,11 @@
     {
         try
         {
+            // Save non-sensitive settings to appsettings.json (git-tracked)
             var path = Path.Combine(Env.ContentRootPath, "appsettings.json");
             var json = File.ReadAllText(path);
             using var doc = JsonDocument.Parse(json);
 
-            var options = new JsonSerializerOptions { WriteIndented = true };
             using var ms = new System.IO.MemoryStream();
             using var writer = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true });
 
@@ -202,8 +220,8 @@
                 if (prop.Name == "MediaBox")
                 {
                     writer.WriteStartObject("MediaBox");
-                    writer.WriteString("TelegramBotToken", botToken);
-                    writer.WriteString("AuthPassword", authPassword);
+                    writer.WriteString("TelegramBotToken", "");
+                    writer.WriteString("AuthPassword", "");
                     writer.WriteString("TvShowsPath", tvShowsPath);
                     writer.WriteString("MoviesPath", moviesPath);
                     writer.WriteString("DownloadsPath", downloadsPath);
@@ -211,7 +229,9 @@
                     writer.WriteString("UnknownPath", unknownPath);
                     writer.WriteString("TransmissionRpcUrl", transmissionUrl);
                     writer.WriteString("TransmissionUsername", transmissionUser);
-                    writer.WriteString("TransmissionPassword", transmissionPass);
+                    writer.WriteString("TransmissionPassword", "");
+                    writer.WriteString("JellyfinUrl", jellyfinUrl);
+                    writer.WriteString("JellyfinApiKey", "");
                     writer.WriteString("RssFeedUrl", rssFeedUrl);
                     writer.WritePropertyName("NewsSources");
                     writer.WriteStartArray();
@@ -242,6 +262,10 @@
             writer.Flush();
 
             File.WriteAllBytes(path, ms.ToArray());
+
+            // Save sensitive settings to appsettings.Secrets.json (gitignored)
+            SaveSecretsFile();
+
             message = "Settings saved. Some changes may require a restart.";
             isError = false;
         }
@@ -250,6 +274,27 @@
             message = $"Error saving settings: {ex.Message}";
             isError = true;
         }
+    }
+
+    private void SaveSecretsFile()
+    {
+        var path = Path.Combine(Env.ContentRootPath, "appsettings.Secrets.json");
+        using var ms = new System.IO.MemoryStream();
+        using var writer = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true });
+
+        writer.WriteStartObject();
+        writer.WriteStartObject("MediaBox");
+        writer.WriteString("TelegramBotToken", botToken);
+        writer.WriteString("AuthPassword", authPassword);
+        if (!string.IsNullOrEmpty(transmissionPass))
+            writer.WriteString("TransmissionPassword", transmissionPass);
+        if (!string.IsNullOrEmpty(jellyfinApiKey))
+            writer.WriteString("JellyfinApiKey", jellyfinApiKey);
+        writer.WriteEndObject();
+        writer.WriteEndObject();
+        writer.Flush();
+
+        File.WriteAllBytes(path, ms.ToArray());
     }
 
     private async Task TriggerScanAsync()

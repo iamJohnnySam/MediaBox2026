@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using MediaBox2026.Models;
 using Microsoft.Extensions.Options;
 
@@ -94,7 +95,7 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
         if (_sessionId != null)
             http.DefaultRequestHeaders.Add("X-Transmission-Session-Id", _sessionId);
 
-        var jsonOpts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.KebabCaseLower };
+        var jsonOpts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.KebabCaseLower, TypeInfoResolver = new DefaultJsonTypeInfoResolver() };
         var json = JsonSerializer.Serialize(request, jsonOpts);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
 

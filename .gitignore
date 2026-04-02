@@ -3,6 +3,9 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
+# MediaBox secrets (tokens, passwords)
+**/appsettings.Secrets.json
+
 # User-specific files
 *.rsuser
 *.suo

@@ -102,6 +102,14 @@ public static partial class FileNameParser
 
     public static (string Name, int? Year) ParseFolderName(string folderName)
     {
+        var matchParen = FolderNameYearParenRegex().Match(folderName);
+        if (matchParen.Success)
+            return (matchParen.Groups[1].Value.Trim(), int.Parse(matchParen.Groups[2].Value));
+
+        var matchBracket = FolderNameYearBracketRegex().Match(folderName);
+        if (matchBracket.Success)
+            return (matchBracket.Groups[1].Value.Trim(), int.Parse(matchBracket.Groups[2].Value));
+
         var match = FolderNameYearRegex().Match(folderName);
         if (match.Success)
             return (match.Groups[1].Value.Trim(), int.Parse(match.Groups[2].Value));
@@ -130,7 +138,7 @@ public static partial class FileNameParser
     }
 
     public static string BuildFolderName(string name, int? year)
-        => year.HasValue ? $"{name} {year}" : name;
+        => year.HasValue ? $"{name} ({year})" : name;
 
     public static double FuzzyMatch(string a, string b)
     {
@@ -179,4 +187,10 @@ public static partial class FileNameParser
 
     [GeneratedRegex(@"^(.+?)\s+((?:19|20)\d{2})$")]
     private static partial Regex FolderNameYearRegex();
+
+    [GeneratedRegex(@"^(.+?)\s*\(((?:19|20)\d{2})\)$")]
+    private static partial Regex FolderNameYearParenRegex();
+
+    [GeneratedRegex(@"^(.+?)\s*\[((?:19|20)\d{2})\]$")]
+    private static partial Regex FolderNameYearBracketRegex();
 }

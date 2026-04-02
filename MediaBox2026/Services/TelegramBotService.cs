@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using MediaBox2026.Models;
 using Microsoft.Extensions.Options;
 
@@ -9,6 +10,7 @@ namespace MediaBox2026.Services;
 public interface ITelegramNotifier
 {
     Task SendMessageAsync(string text, CancellationToken ct = default);
+    Task SendPhotoAsync(string photoUrl, string caption, List<List<InlineButton>>? buttons = null, CancellationToken ct = default);
     Task SendInlineKeyboardAsync(string text, List<List<InlineButton>> buttons, CancellationToken ct = default);
     ConcurrentDictionary<string, TaskCompletionSource<string>> PendingCallbacks { get; }
 }
@@ -24,15 +26,40 @@ public class TelegramBotService(
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver()
     };
 
     private readonly HttpClient _http = new();
     private long _offset;
 
     public ConcurrentDictionary<string, TaskCompletionSource<string>> PendingCallbacks { get; } = new();
+    private readonly ConcurrentDictionary<long, MovieSession> _movieSessions = new();
 
     private string ApiUrl => $"https://api.telegram.org/bot{settings.CurrentValue.TelegramBotToken}";
+
+    public async Task SendPhotoAsync(string photoUrl, string caption, List<List<InlineButton>>? buttons = null, CancellationToken ct = default)
+    {
+        var chatId = db.GetAuthenticatedChatId();
+        if (chatId == null) return;
+
+        var payload = new Dictionary<string, object>
+        {
+            ["chat_id"] = chatId.Value,
+            ["photo"] = photoUrl,
+            ["caption"] = caption
+        };
+
+        if (buttons != null)
+        {
+            var keyboard = buttons.Select(row =>
+                row.Select(b => new { text = b.Text, callback_data = b.CallbackData }).ToArray()
+            ).ToArray();
+            payload["reply_markup"] = new { inline_keyboard = keyboard };
+        }
+
+        await PostAsync("sendPhoto", JsonSerializer.Serialize(payload, JsonOpts), ct);
+    }
 
     public async Task SendMessageAsync(string text, CancellationToken ct = default)
     {
@@ -59,7 +86,7 @@ public class TelegramBotService(
             chat_id = chatId.Value,
             text,
             reply_markup = new { inline_keyboard = keyboard }
-        });
+        }, JsonOpts);
 
         await PostAsync("sendMessage", payload, ct);
     }
@@ -160,7 +187,8 @@ public class TelegramBotService(
                     "/status - System status\n" +
                     "/downloads - Active downloads\n" +
                     "/watchlist - Movie watchlist\n" +
-                    "/add Movie Name - Add to watchlist\n" +
+                    "/movie Movie Name - Search & add movie\n" +
+                    "/add Movie Name - Quick add to watchlist\n" +
                     "/remove Movie Name - Remove from watchlist\n" +
                     "/scan - Trigger media scan\n" +
                     "/help - Show this message",
@@ -212,6 +240,11 @@ public class TelegramBotService(
                     }
                     await SendToChatAsync(chatId, sb.ToString(), ct, parseMode: "Markdown");
                 }
+                break;
+
+            case "/movie":
+            case "/search":
+                await HandleMovieSearchAsync(chatId, arg, ct);
                 break;
 
             case "/add":
@@ -271,7 +304,16 @@ public class TelegramBotService(
         var callbackId = cbq.GetProperty("id").GetString() ?? "";
         var data = cbq.TryGetProperty("data", out var d) ? d.GetString() ?? "" : "";
 
-        await PostAsync("answerCallbackQuery", JsonSerializer.Serialize(new { callback_query_id = callbackId }), ct);
+        await PostAsync("answerCallbackQuery", JsonSerializer.Serialize(new { callback_query_id = callbackId }, JsonOpts), ct);
+
+        // Movie search callbacks
+        if (data.StartsWith("ms:"))
+        {
+            var chatId = cbq.GetProperty("message").GetProperty("chat").GetProperty("id").GetInt64();
+            var action = data[3..];
+            await HandleMovieSessionCallbackAsync(chatId, action, ct);
+            return;
+        }
 
         var colonIdx = data.IndexOf(':');
         if (colonIdx > 0)
@@ -295,7 +337,7 @@ public class TelegramBotService(
         };
         if (parseMode != null) payload["parse_mode"] = parseMode;
 
-        await PostAsync("sendMessage", JsonSerializer.Serialize(payload), ct);
+        await PostAsync("sendMessage", JsonSerializer.Serialize(payload, JsonOpts), ct);
     }
 
     private async Task PostAsync(string method, string json, CancellationToken ct)
@@ -309,5 +351,208 @@ public class TelegramBotService(
         {
             logger.LogWarning(ex, "Telegram API call failed: {Method}", method);
         }
+    }
+
+    private async Task HandleMovieSearchAsync(long chatId, string query, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            await SendToChatAsync(chatId, "Usage: /movie Movie Name", ct);
+            return;
+        }
+
+        await SendToChatAsync(chatId, $"🔍 Searching for \"{query}\"...", ct);
+
+        try
+        {
+            using var http = new HttpClient();
+            var url = $"https://yts.bz/api/v2/list_movies.json?query_term={Uri.EscapeDataString(query)}&limit=10&sort_by=rating";
+            var response = await http.GetAsync(url, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                await SendToChatAsync(chatId, "⚠️ Movie search is temporarily unavailable. Please try again later.", ct);
+                return;
+            }
+
+            var json = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
+            if (!json.TryGetProperty("data", out var data) ||
+                !data.TryGetProperty("movies", out var movies) ||
+                movies.GetArrayLength() == 0)
+            {
+                await SendToChatAsync(chatId, $"❌ No movies found for \"{query}\". Try a different search term.", ct);
+                return;
+            }
+
+            var results = new List<MovieSearchResult>();
+            foreach (var m in movies.EnumerateArray())
+            {
+                var torrents = new List<(string Quality, string Url, string Size)>();
+                if (m.TryGetProperty("torrents", out var tArr))
+                {
+                    foreach (var t in tArr.EnumerateArray())
+                    {
+                        var tq = t.GetProperty("quality").GetString() ?? "";
+                        var tu = t.GetProperty("url").GetString() ?? "";
+                        var ts = t.TryGetProperty("size", out var sz) ? sz.GetString() ?? "" : "";
+                        if (!string.IsNullOrEmpty(tu))
+                            torrents.Add((tq, tu, ts));
+                    }
+                }
+
+                results.Add(new MovieSearchResult(
+                    Title: m.GetProperty("title").GetString() ?? "",
+                    Year: m.GetProperty("year").GetInt32(),
+                    Rating: m.TryGetProperty("rating", out var r) ? r.GetDouble() : 0,
+                    ImdbCode: m.TryGetProperty("imdb_code", out var ic) ? ic.GetString() : null,
+                    PosterUrl: m.TryGetProperty("medium_cover_image", out var p) ? p.GetString() : null,
+                    TrailerCode: m.TryGetProperty("yt_trailer_code", out var tr) ? tr.GetString() : null,
+                    Genres: m.TryGetProperty("genres", out var g)
+                        ? string.Join(", ", g.EnumerateArray().Select(x => x.GetString()))
+                        : null,
+                    Torrents: torrents
+                ));
+            }
+
+            var session = new MovieSession { Results = results, CurrentIndex = 0 };
+            _movieSessions[chatId] = session;
+            await SendMovieResultAsync(chatId, session, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Movie search failed for: {Query}", query);
+            await SendToChatAsync(chatId, "⚠️ Movie search failed. Please try again later.", ct);
+        }
+    }
+
+    private async Task SendMovieResultAsync(long chatId, MovieSession session, CancellationToken ct)
+    {
+        var movie = session.Results[session.CurrentIndex];
+        var caption = new StringBuilder();
+        caption.AppendLine($"🎬 {movie.Title} ({movie.Year})");
+        caption.AppendLine($"⭐ Rating: {movie.Rating:F1}/10");
+        if (!string.IsNullOrEmpty(movie.Genres))
+            caption.AppendLine($"🎭 {movie.Genres}");
+        if (!string.IsNullOrEmpty(movie.TrailerCode))
+            caption.AppendLine($"🎥 Trailer: https://youtube.com/watch?v={movie.TrailerCode}");
+        if (movie.Torrents.Count > 0)
+            caption.AppendLine($"📀 {string.Join(" | ", movie.Torrents.Select(t => $"{t.Quality} ({t.Size})"))}");
+        else
+            caption.AppendLine("📀 No torrents available yet");
+        caption.Append($"\nResult {session.CurrentIndex + 1} of {session.Results.Count}");
+
+        var buttons = new List<List<InlineButton>>();
+        var navRow = new List<InlineButton>();
+        if (session.CurrentIndex > 0)
+            navRow.Add(new InlineButton { Text = "⬅️ Prev", CallbackData = "ms:prev" });
+        navRow.Add(new InlineButton { Text = "✅ Add to Watchlist", CallbackData = "ms:add" });
+        if (session.CurrentIndex < session.Results.Count - 1)
+            navRow.Add(new InlineButton { Text = "➡️ Next", CallbackData = "ms:next" });
+        buttons.Add(navRow);
+        buttons.Add([new InlineButton { Text = "❌ Cancel", CallbackData = "ms:cancel" }]);
+
+        if (!string.IsNullOrEmpty(movie.PosterUrl))
+        {
+            await SendPhotoToChatAsync(chatId, movie.PosterUrl, caption.ToString(), buttons, ct);
+        }
+        else
+        {
+            await SendInlineKeyboardToChatAsync(chatId, caption.ToString(), buttons, ct);
+        }
+    }
+
+    private async Task HandleMovieSessionCallbackAsync(long chatId, string action, CancellationToken ct)
+    {
+        if (!_movieSessions.TryGetValue(chatId, out var session))
+        {
+            await SendToChatAsync(chatId, "No active movie search. Use /movie to start one.", ct);
+            return;
+        }
+
+        switch (action)
+        {
+            case "next":
+                if (session.CurrentIndex < session.Results.Count - 1)
+                {
+                    session.CurrentIndex++;
+                    await SendMovieResultAsync(chatId, session, ct);
+                }
+                break;
+
+            case "prev":
+                if (session.CurrentIndex > 0)
+                {
+                    session.CurrentIndex--;
+                    await SendMovieResultAsync(chatId, session, ct);
+                }
+                break;
+
+            case "add":
+                var movie = session.Results[session.CurrentIndex];
+                db.Watchlist.Insert(new WatchlistItem
+                {
+                    Name = movie.Title,
+                    Year = movie.Year,
+                    ImdbCode = movie.ImdbCode,
+                    PosterUrl = movie.PosterUrl,
+                    TrailerCode = movie.TrailerCode,
+                    Status = WatchlistStatus.Pending,
+                    AddedDate = DateTime.UtcNow
+                });
+                state.WatchlistCount = db.Watchlist.Count(w => w.Status == WatchlistStatus.Pending);
+                state.AddActivity($"Added to watchlist: {movie.Title} ({movie.Year})");
+                state.NotifyChange();
+                _movieSessions.TryRemove(chatId, out _);
+                await SendToChatAsync(chatId, $"✅ Added \"{movie.Title} ({movie.Year})\" to watchlist!", ct);
+                break;
+
+            case "cancel":
+                _movieSessions.TryRemove(chatId, out _);
+                await SendToChatAsync(chatId, "🚫 Movie search cancelled.", ct);
+                break;
+        }
+    }
+
+    private async Task SendPhotoToChatAsync(long chatId, string photoUrl, string caption, List<List<InlineButton>> buttons, CancellationToken ct)
+    {
+        var keyboard = buttons.Select(row =>
+            row.Select(b => new { text = b.Text, callback_data = b.CallbackData }).ToArray()
+        ).ToArray();
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            chat_id = chatId,
+            photo = photoUrl,
+            caption,
+            reply_markup = new { inline_keyboard = keyboard }
+        }, JsonOpts);
+
+        await PostAsync("sendPhoto", payload, ct);
+    }
+
+    private async Task SendInlineKeyboardToChatAsync(long chatId, string text, List<List<InlineButton>> buttons, CancellationToken ct)
+    {
+        var keyboard = buttons.Select(row =>
+            row.Select(b => new { text = b.Text, callback_data = b.CallbackData }).ToArray()
+        ).ToArray();
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            chat_id = chatId,
+            text,
+            reply_markup = new { inline_keyboard = keyboard }
+        }, JsonOpts);
+
+        await PostAsync("sendMessage", payload, ct);
+    }
+
+    private record MovieSearchResult(
+        string Title, int Year, double Rating, string? ImdbCode,
+        string? PosterUrl, string? TrailerCode, string? Genres,
+        List<(string Quality, string Url, string Size)> Torrents);
+
+    private class MovieSession
+    {
+        public List<MovieSearchResult> Results { get; set; } = [];
+        public int CurrentIndex { get; set; }
     }
 }

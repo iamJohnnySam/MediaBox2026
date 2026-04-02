@@ -9,6 +9,7 @@ public class InMemoryLogSink
     private const int MaxEntries = 1000;
 
     public event Action? OnNewLog;
+    public event Action<LogEntry>? OnErrorLog;
 
     public IReadOnlyList<LogEntry> GetEntries() => [.. _entries];
 
@@ -19,6 +20,9 @@ public class InMemoryLogSink
             _entries.TryDequeue(out _);
 
         OnNewLog?.Invoke();
+
+        if (entry.Level >= LogLevel.Error)
+            OnErrorLog?.Invoke(entry);
     }
 }
 

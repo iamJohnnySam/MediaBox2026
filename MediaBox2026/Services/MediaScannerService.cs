@@ -12,14 +12,22 @@ public class MediaScannerService(
     {
         await Task.Delay(TimeSpan.FromSeconds(5), ct);
 
-        logger.LogInformation("Running initial media scan...");
-        await catalog.ScanAllAsync(ct);
+        try
+        {
+            logger.LogInformation("Running initial media scan...");
+            await catalog.ScanAllAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Initial media scan failed");
+        }
 
         while (!ct.IsCancellationRequested)
         {
-            await Task.Delay(TimeSpan.FromHours(settings.CurrentValue.MediaScanHours), ct);
             try
             {
+                await Task.Delay(TimeSpan.FromHours(settings.CurrentValue.MediaScanHours), ct);
                 await catalog.ScanAllAsync(ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }

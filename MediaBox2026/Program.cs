@@ -6,6 +6,11 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.WebHost.UseUrls("http://0.0.0.0:5000");
 
+// Load secrets file (gitignored) — overrides appsettings.json for sensitive values
+// Use AppContext.BaseDirectory so the file is found next to the binary regardless of CWD
+var secretsPath = Path.Combine(AppContext.BaseDirectory, "appsettings.Secrets.json");
+builder.Configuration.AddJsonFile(secretsPath, optional: true, reloadOnChange: true);
+
 // In-memory log sink for Blazor log viewer
 var logSink = new InMemoryLogSink();
 builder.Services.AddSingleton(logSink);
@@ -31,6 +36,10 @@ builder.Services.PostConfigure<MediaBoxSettings>(settings =>
 		if (settings.YtDlpArchivePath.StartsWith("/"))
 			settings.YtDlpArchivePath = Path.Combine(
 				Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ytdl-archive.txt");
+
+		if (settings.CrashDataPath.StartsWith("/"))
+			settings.CrashDataPath = Path.Combine(
+				Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MediaBox", "crashes");
 	}
 
 	static string RemapLinuxPath(string path)
@@ -46,6 +55,7 @@ builder.Services.PostConfigure<MediaBoxSettings>(settings =>
 builder.Services.AddSingleton<MediaDatabase>();
 builder.Services.AddSingleton<MediaBoxState>();
 builder.Services.AddSingleton<TransmissionClient>();
+builder.Services.AddSingleton<JellyfinClient>();
 builder.Services.AddSingleton<MediaCatalogService>();
 builder.Services.AddHttpClient();
 
@@ -61,6 +71,13 @@ builder.Services.AddHostedService<TransmissionMonitorService>();
 builder.Services.AddHostedService<DownloadOrganizerService>();
 builder.Services.AddHostedService<MovieWatchlistService>();
 builder.Services.AddHostedService<YouTubeDownloadService>();
+
+// Crash reporter (subscribes to error logs, sends Telegram + saves crash data)
+builder.Services.AddSingleton<CrashReporter>();
+
+// Prevent BackgroundService failures from crashing the entire application
+builder.Services.Configure<HostOptions>(opts =>
+	opts.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore);
 
 // Blazor
 builder.Services.AddRazorComponents()
@@ -80,5 +97,20 @@ app.UseAntiforgery();
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
 	.AddInteractiveServerRenderMode();
+
+// Initialize crash reporter eagerly (subscribes to log events)
+var crashReporter = app.Services.GetRequiredService<CrashReporter>();
+
+AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+{
+	if (e.ExceptionObject is Exception ex)
+		crashReporter.SaveUnhandledException(ex, "UnhandledException");
+};
+
+TaskScheduler.UnobservedTaskException += (_, e) =>
+{
+	crashReporter.SaveUnhandledException(e.Exception, "UnobservedTaskException");
+	e.SetObserved();
+};
 
 app.Run();

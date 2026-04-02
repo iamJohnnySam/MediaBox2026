@@ -7,6 +7,7 @@ public class DownloadOrganizerService(
     MediaDatabase db,
     MediaCatalogService catalog,
     TransmissionClient transmission,
+    JellyfinClient jellyfin,
     ITelegramNotifier telegram,
     MediaBoxState state,
     IOptionsMonitor<MediaBoxSettings> settings,
@@ -44,6 +45,7 @@ public class DownloadOrganizerService(
             .Select(t => t.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        var movedAny = false;
         var entries = Directory.GetFileSystemEntries(config.DownloadsPath);
         foreach (var entry in entries)
         {
@@ -51,13 +53,16 @@ public class DownloadOrganizerService(
             if (activeNames.Contains(name)) continue;
 
             if (Directory.Exists(entry))
-                await ProcessDirectoryAsync(entry, config, ct);
+                movedAny |= await ProcessDirectoryAsync(entry, config, ct);
             else
-                await ProcessFileAsync(entry, config, ct);
+                movedAny |= await ProcessFileAsync(entry, config, ct);
         }
+
+        if (movedAny)
+            await jellyfin.TriggerLibraryScanAsync(ct);
     }
 
-    private async Task ProcessDirectoryAsync(string dirPath, MediaBoxSettings config, CancellationToken ct)
+    private async Task<bool> ProcessDirectoryAsync(string dirPath, MediaBoxSettings config, CancellationToken ct)
     {
         var allFiles = Directory.GetFiles(dirPath, "*.*", SearchOption.AllDirectories);
         var hasMediaFiles = false;
@@ -84,14 +89,20 @@ public class DownloadOrganizerService(
         {
             logger.LogWarning(ex, "Could not clean up directory: {Dir}", dirPath);
         }
+
+        return hasMediaFiles;
     }
 
-    private async Task ProcessFileAsync(string filePath, MediaBoxSettings config, CancellationToken ct)
+    private async Task<bool> ProcessFileAsync(string filePath, MediaBoxSettings config, CancellationToken ct)
     {
         if (FileNameParser.IsMediaFile(filePath) || FileNameParser.IsSubtitleFile(filePath))
+        {
             await MoveMediaFileAsync(filePath, config, ct);
-        else
-            MoveToUnknown(filePath, config);
+            return true;
+        }
+
+        MoveToUnknown(filePath, config);
+        return false;
     }
 
     private async Task MoveMediaFileAsync(string filePath, MediaBoxSettings config, CancellationToken ct)
@@ -112,11 +123,11 @@ public class DownloadOrganizerService(
     private async Task MoveTvShowFileAsync(string filePath, ParsedMediaInfo parsed, MediaBoxSettings config, CancellationToken ct)
     {
         var show = catalog.FindTvShow(parsed.CleanName);
-        string destDir;
+        string baseDir;
 
         if (show != null)
         {
-            destDir = show.FolderPath;
+            baseDir = show.FolderPath;
         }
         else
         {
@@ -125,16 +136,19 @@ public class DownloadOrganizerService(
                 year = await catalog.LookupTvShowYearAsync(parsed.CleanName, ct);
 
             var folderName = FileNameParser.BuildFolderName(parsed.CleanName, year);
-            destDir = Path.Combine(config.TvShowsPath, folderName);
-            Directory.CreateDirectory(destDir);
+            baseDir = Path.Combine(config.TvShowsPath, folderName);
+            Directory.CreateDirectory(baseDir);
         }
 
-        var destPath = Path.Combine(destDir, Path.GetFileName(filePath));
+        var seasonDir = Path.Combine(baseDir, $"Season {parsed.Season!.Value:D2}");
+        Directory.CreateDirectory(seasonDir);
+
+        var destPath = Path.Combine(seasonDir, Path.GetFileName(filePath));
         if (File.Exists(destPath))
             destPath = GetUniquePath(destPath);
 
         File.Move(filePath, destPath);
-        var msg = $"📺 Organized: {Path.GetFileName(filePath)} → {Path.GetFileName(destDir)}/";
+        var msg = $"📺 Organized: {Path.GetFileName(filePath)} → {Path.GetFileName(baseDir)}/Season {parsed.Season.Value:D2}/";
         logger.LogInformation(msg);
         state.AddActivity(msg);
         await telegram.SendMessageAsync(msg, ct);
