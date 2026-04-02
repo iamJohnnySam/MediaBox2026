@@ -1,21 +1,31 @@
-using LiteDB;
+using System.Linq.Expressions;
+using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using MediaBox2026.Models;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
 
 namespace MediaBox2026.Services;
 
 public class MediaDatabase : IDisposable
 {
-    private readonly ILiteDatabase _db;
+    private readonly SqliteConnection _db;
     private readonly ILogger<MediaDatabase> _logger;
+    internal readonly object DbLock = new();
 
-    public ILiteCollection<TvShow> TvShows => _db.GetCollection<TvShow>("tvshows");
-    public ILiteCollection<Movie> Movies => _db.GetCollection<Movie>("movies");
-    public ILiteCollection<YouTubeVideo> YouTubeVideos => _db.GetCollection<YouTubeVideo>("youtube");
-    public ILiteCollection<WatchlistItem> Watchlist => _db.GetCollection<WatchlistItem>("watchlist");
-    public ILiteCollection<PendingDownload> PendingDownloads => _db.GetCollection<PendingDownload>("pending");
-    public ILiteCollection<ProcessedRssItem> ProcessedRssItems => _db.GetCollection<ProcessedRssItem>("rss_processed");
-    public ILiteCollection<DispatchedEpisode> DispatchedEpisodes => _db.GetCollection<DispatchedEpisode>("dispatched");
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver()
+    };
+
+    public DbCollection<TvShow> TvShows { get; }
+    public DbCollection<Movie> Movies { get; }
+    public DbCollection<YouTubeVideo> YouTubeVideos { get; }
+    public DbCollection<WatchlistItem> Watchlist { get; }
+    public DbCollection<PendingDownload> PendingDownloads { get; }
+    public DbCollection<ProcessedRssItem> ProcessedRssItems { get; }
+    public DbCollection<DispatchedEpisode> DispatchedEpisodes { get; }
 
     public MediaDatabase(IOptions<MediaBoxSettings> settings, ILogger<MediaDatabase> logger)
     {
@@ -25,53 +35,197 @@ public class MediaDatabase : IDisposable
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=Direct");
+        MigrateFromLiteDb(dbPath);
 
-        // Repair scan-based collections that may have corrupted _id types from previous bugs.
-        // These collections are fully rebuilt from the filesystem on every media scan.
-        var repaired = RepairCollectionIfCorrupted("tvshows")
-                     | RepairCollectionIfCorrupted("movies")
-                     | RepairCollectionIfCorrupted("youtube");
+        _db = new SqliteConnection($"Data Source={dbPath}");
+        _db.Open();
 
-        if (repaired)
+        using (var cmd = _db.CreateCommand())
         {
-            _db.Rebuild();
-            _logger.LogWarning("Database rebuilt to clean up residual corruption.");
+            cmd.CommandText = "PRAGMA journal_mode=WAL";
+            cmd.ExecuteScalar();
+        }
+        using (var cmd = _db.CreateCommand())
+        {
+            cmd.CommandText = "PRAGMA synchronous=NORMAL";
+            cmd.ExecuteNonQuery();
         }
 
-        TvShows.EnsureIndex(x => x.Name);
-        TvShows.EnsureIndex(x => x.FolderPath);
-        Movies.EnsureIndex(x => x.Name);
-        Movies.EnsureIndex(x => x.FolderPath);
-        Watchlist.EnsureIndex(x => x.Status);
-        PendingDownloads.EnsureIndex(x => x.Status);
-        ProcessedRssItems.EnsureIndex(x => x.Guid);
-        DispatchedEpisodes.EnsureIndex(x => x.ShowName);
+        TvShows = new DbCollection<TvShow>(_db, DbLock, "tvshows", JsonOpts);
+        Movies = new DbCollection<Movie>(_db, DbLock, "movies", JsonOpts);
+        YouTubeVideos = new DbCollection<YouTubeVideo>(_db, DbLock, "youtube", JsonOpts);
+        Watchlist = new DbCollection<WatchlistItem>(_db, DbLock, "watchlist", JsonOpts);
+        PendingDownloads = new DbCollection<PendingDownload>(_db, DbLock, "pending", JsonOpts);
+        ProcessedRssItems = new DbCollection<ProcessedRssItem>(_db, DbLock, "rss_processed", JsonOpts);
+        DispatchedEpisodes = new DbCollection<DispatchedEpisode>(_db, DbLock, "dispatched", JsonOpts);
+
+        _logger.LogInformation("SQLite database initialized at {Path}", dbPath);
     }
 
-    private bool RepairCollectionIfCorrupted(string name)
+    private void MigrateFromLiteDb(string dbPath)
     {
-        if (!_db.CollectionExists(name)) return false;
+        if (!File.Exists(dbPath)) return;
 
         try
         {
-            var col = _db.GetCollection(name);
-            var hasCorruption = col.FindAll().Any(d => !d["_id"].IsInt32);
-            if (hasCorruption)
+            var header = new byte[16];
+            using var fs = File.OpenRead(dbPath);
+            if (fs.Read(header, 0, 16) >= 16)
             {
-                _db.DropCollection(name);
-                _logger.LogWarning("Dropped corrupted collection '{Name}' (mixed _id types). Data will be re-scanned.", name);
-                return true;
+                // SQLite files always start with this exact 16-byte header string
+                var sqliteMagic = "SQLite format 3\0"u8;
+                if (!header.AsSpan(0, 16).SequenceEqual(sqliteMagic))
+                {
+                    fs.Close();
+                    File.Delete(dbPath);
+                    // Clean up any LiteDB journal/log files too
+                    foreach (var f in Directory.GetFiles(Path.GetDirectoryName(dbPath)!,
+                        Path.GetFileName(dbPath) + "*"))
+                        File.Delete(f);
+                    _logger.LogWarning("Deleted old LiteDB database. Scan data will be rebuilt automatically.");
+                }
             }
-            return false;
         }
         catch (Exception ex)
         {
-            _db.DropCollection(name);
-            _logger.LogWarning(ex, "Dropped unreadable collection '{Name}'. Data will be re-scanned.", name);
-            return true;
+            _logger.LogWarning(ex, "Could not check database file format during migration.");
         }
     }
 
     public void Dispose() => _db.Dispose();
+}
+
+/// <summary>
+/// Lightweight document collection backed by SQLite.
+/// Each row stores (id INTEGER PK, data TEXT as JSON).
+/// Predicates are evaluated in-memory — fine for datasets under a few thousand items.
+/// </summary>
+public class DbCollection<T> where T : class, IEntity, new()
+{
+    private readonly SqliteConnection _db;
+    private readonly object _lock;
+    private readonly string _table;
+    private readonly JsonSerializerOptions _jsonOpts;
+
+    internal DbCollection(SqliteConnection db, object lk, string table, JsonSerializerOptions jsonOpts)
+    {
+        _db = db;
+        _lock = lk;
+        _table = table;
+        _jsonOpts = jsonOpts;
+
+        lock (_lock)
+        {
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = $"CREATE TABLE IF NOT EXISTS [{_table}] (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL)";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    public T? FindOne(Func<T, bool> predicate) => FindAll().FirstOrDefault(predicate);
+
+    public IEnumerable<T> Find(Func<T, bool> predicate) => FindAll().Where(predicate).ToList();
+
+    public List<T> FindAll()
+    {
+        lock (_lock)
+        {
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = $"SELECT id, data FROM [{_table}]";
+            using var reader = cmd.ExecuteReader();
+            var results = new List<T>();
+            while (reader.Read())
+            {
+                var id = reader.GetInt32(0);
+                var json = reader.GetString(1);
+                var entity = JsonSerializer.Deserialize<T>(json, _jsonOpts)!;
+                entity.Id = id;
+                results.Add(entity);
+            }
+            return results;
+        }
+    }
+
+    public void Insert(T entity)
+    {
+        lock (_lock)
+        {
+            entity.Id = 0;
+            var json = JsonSerializer.Serialize(entity, _jsonOpts);
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = $"INSERT INTO [{_table}] (data) VALUES (@data) RETURNING id";
+            cmd.Parameters.AddWithValue("@data", json);
+            var id = Convert.ToInt32(cmd.ExecuteScalar());
+            entity.Id = id;
+        }
+    }
+
+    public bool Update(T entity)
+    {
+        lock (_lock)
+        {
+            var id = entity.Id;
+            var json = JsonSerializer.Serialize(entity, _jsonOpts);
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = $"UPDATE [{_table}] SET data = @data WHERE id = @id";
+            cmd.Parameters.AddWithValue("@data", json);
+            cmd.Parameters.AddWithValue("@id", id);
+            return cmd.ExecuteNonQuery() > 0;
+        }
+    }
+
+    public int DeleteMany(Func<T, bool> predicate)
+    {
+        lock (_lock)
+        {
+            var ids = ReadIdsAndEntities().Where(x => predicate(x.Entity)).Select(x => x.Id).ToList();
+            if (ids.Count == 0) return 0;
+
+            using var cmd = _db.CreateCommand();
+            var paramNames = new List<string>();
+            for (var i = 0; i < ids.Count; i++)
+            {
+                var p = $"@id{i}";
+                paramNames.Add(p);
+                cmd.Parameters.AddWithValue(p, ids[i]);
+            }
+            cmd.CommandText = $"DELETE FROM [{_table}] WHERE id IN ({string.Join(",", paramNames)})";
+            return cmd.ExecuteNonQuery();
+        }
+    }
+
+    public int Count()
+    {
+        lock (_lock)
+        {
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = $"SELECT COUNT(*) FROM [{_table}]";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+    }
+
+    public int Count(Func<T, bool> predicate) => FindAll().Count(predicate);
+
+    public bool Exists(Func<T, bool> predicate) => FindAll().Any(predicate);
+
+    // No-op — in-memory filtering doesn't need indexes
+    public bool EnsureIndex<K>(Expression<Func<T, K>> keySelector) => true;
+
+    private List<(int Id, T Entity)> ReadIdsAndEntities()
+    {
+        // Must be called within lock
+        using var cmd = _db.CreateCommand();
+        cmd.CommandText = $"SELECT id, data FROM [{_table}]";
+        using var reader = cmd.ExecuteReader();
+        var results = new List<(int, T)>();
+        while (reader.Read())
+        {
+            var id = reader.GetInt32(0);
+            var json = reader.GetString(1);
+            var entity = JsonSerializer.Deserialize<T>(json, _jsonOpts)!;
+            entity.Id = id;
+            results.Add((id, entity));
+        }
+        return results;
+    }
 }

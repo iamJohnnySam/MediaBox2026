@@ -2,7 +2,12 @@ using Microsoft.Extensions.Logging;
 
 namespace MediaBox2026.Models;
 
-public class TvShow
+public interface IEntity
+{
+    int Id { get; set; }
+}
+
+public class TvShow : IEntity
 {
     public int Id { get; set; }
     public string Name { get; set; } = "";
@@ -21,7 +26,7 @@ public class EpisodeInfo
     public string FileName { get; set; } = "";
 }
 
-public class Movie
+public class Movie : IEntity
 {
     public int Id { get; set; }
     public string Name { get; set; } = "";
@@ -31,7 +36,7 @@ public class Movie
     public DateTime LastScanned { get; set; }
 }
 
-public class YouTubeVideo
+public class YouTubeVideo : IEntity
 {
     public int Id { get; set; }
     public string Uploader { get; set; } = "";
@@ -41,7 +46,7 @@ public class YouTubeVideo
     public DateTime CatalogedDate { get; set; }
 }
 
-public class WatchlistItem
+public class WatchlistItem : IEntity
 {
     public int Id { get; set; }
     public string Name { get; set; } = "";
@@ -65,7 +70,7 @@ public enum WatchlistStatus
     Cancelled
 }
 
-public class PendingDownload
+public class PendingDownload : IEntity
 {
     public int Id { get; set; }
     public string RssTitle { get; set; } = "";
@@ -88,7 +93,7 @@ public enum PendingStatus
     Downloaded
 }
 
-public class ProcessedRssItem
+public class ProcessedRssItem : IEntity
 {
     public int Id { get; set; }
     public string Guid { get; set; } = "";
@@ -184,7 +189,7 @@ public class NewsSource
     public string DownloadTime { get; set; } = "19:45";
 }
 
-public class DispatchedEpisode
+public class DispatchedEpisode : IEntity
 {
     public int Id { get; set; }
     public string ShowName { get; set; } = "";
