@@ -25,7 +25,7 @@ public class MediaDatabase : IDisposable
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=Shared");
+        _db = new LiteDatabase($"Filename={dbPath};Connection=Direct");
 
         // Repair scan-based collections that may have corrupted _id types from previous bugs.
         // These collections are fully rebuilt from the filesystem on every media scan.
