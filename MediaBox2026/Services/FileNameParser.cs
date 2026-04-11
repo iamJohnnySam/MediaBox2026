@@ -139,8 +139,25 @@ public static partial class FileNameParser
         return match.Success ? match.Value.ToLowerInvariant() : null;
     }
 
-    public static string BuildFolderName(string name, int? year)
-        => year.HasValue ? $"{name} ({year})" : name;
+    public enum YearFormat
+    {
+        Parentheses,  // Show Name (2023)
+        Brackets,     // Show Name [2023]
+        Space         // Show Name 2023
+    }
+
+    public static string BuildFolderName(string name, int? year, YearFormat format = YearFormat.Parentheses)
+    {
+        if (!year.HasValue) return name;
+
+        return format switch
+        {
+            YearFormat.Parentheses => $"{name} ({year})",
+            YearFormat.Brackets => $"{name} [{year}]",
+            YearFormat.Space => $"{name} {year}",
+            _ => $"{name} ({year})"
+        };
+    }
 
     public static double FuzzyMatch(string a, string b)
     {

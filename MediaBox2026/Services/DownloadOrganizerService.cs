@@ -124,7 +124,7 @@ public class DownloadOrganizerService(
 
     private async Task MoveTvShowFileAsync(string filePath, ParsedMediaInfo parsed, MediaBoxSettings config, CancellationToken ct)
     {
-        var show = catalog.FindTvShow(parsed.CleanName);
+        var show = catalog.FindTvShow(parsed.CleanName, parsed.Year);
         string baseDir;
 
         if (show != null)
@@ -135,11 +135,36 @@ public class DownloadOrganizerService(
         {
             var year = parsed.Year;
             if (!year.HasValue)
+            {
+                logger.LogInformation("Looking up year for: {ShowName}", parsed.CleanName);
                 year = await catalog.LookupTvShowYearAsync(parsed.CleanName, ct);
 
-            var folderName = FileNameParser.BuildFolderName(parsed.CleanName, year);
-            baseDir = Path.Combine(config.TvShowsPath, folderName);
-            Directory.CreateDirectory(baseDir);
+                if (year.HasValue)
+                {
+                    logger.LogInformation("Found year {Year} for: {ShowName}", year.Value, parsed.CleanName);
+                }
+                else
+                {
+                    logger.LogWarning("⚠️ Could not determine year for: {ShowName} - creating folder without year", parsed.CleanName);
+                }
+            }
+
+            var folderName = FileNameParser.BuildFolderName(parsed.CleanName, year, catalog.GetPreferredYearFormat());
+
+            var existingFolder = Directory.GetDirectories(config.TvShowsPath)
+                .FirstOrDefault(d => string.Equals(Path.GetFileName(d), folderName, StringComparison.OrdinalIgnoreCase));
+
+            if (existingFolder != null)
+            {
+                baseDir = existingFolder;
+                logger.LogDebug("Using existing folder (case-insensitive match): {Folder}", Path.GetFileName(existingFolder));
+            }
+            else
+            {
+                baseDir = Path.Combine(config.TvShowsPath, folderName);
+                Directory.CreateDirectory(baseDir);
+                logger.LogInformation("Created new folder: {Folder}", folderName);
+            }
         }
 
         var seasonDir = Path.Combine(baseDir, $"Season {parsed.Season!.Value:D2}");
@@ -169,11 +194,36 @@ public class DownloadOrganizerService(
         {
             var year = parsed.Year;
             if (!year.HasValue)
+            {
+                logger.LogInformation("Looking up year for: {MovieName}", parsed.CleanName);
                 year = await catalog.LookupMovieYearAsync(parsed.CleanName, ct);
 
-            var folderName = FileNameParser.BuildFolderName(parsed.CleanName, year);
-            destDir = Path.Combine(config.MoviesPath, folderName);
-            Directory.CreateDirectory(destDir);
+                if (year.HasValue)
+                {
+                    logger.LogInformation("Found year {Year} for: {MovieName}", year.Value, parsed.CleanName);
+                }
+                else
+                {
+                    logger.LogWarning("⚠️ Could not determine year for: {MovieName} - creating folder without year", parsed.CleanName);
+                }
+            }
+
+            var folderName = FileNameParser.BuildFolderName(parsed.CleanName, year, catalog.GetPreferredYearFormat());
+
+            var existingFolder = Directory.GetDirectories(config.MoviesPath)
+                .FirstOrDefault(d => string.Equals(Path.GetFileName(d), folderName, StringComparison.OrdinalIgnoreCase));
+
+            if (existingFolder != null)
+            {
+                destDir = existingFolder;
+                logger.LogDebug("Using existing folder (case-insensitive match): {Folder}", Path.GetFileName(existingFolder));
+            }
+            else
+            {
+                destDir = Path.Combine(config.MoviesPath, folderName);
+                Directory.CreateDirectory(destDir);
+                logger.LogInformation("Created new folder: {Folder}", folderName);
+            }
         }
 
         var destPath = Path.Combine(destDir, Path.GetFileName(filePath));

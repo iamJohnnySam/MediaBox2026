@@ -29,6 +29,7 @@ public class MediaDatabase : IDisposable
     public DbCollection<PendingLargeTorrent> PendingLargeTorrents { get; }
     public DbCollection<RssFeedSubscription> RssFeedSubscriptions { get; }
     public DbCollection<ProcessedFeedItem> ProcessedFeedItems { get; }
+    public DbCollection<NotifiedDuplicate> NotifiedDuplicates { get; }
 
     public MediaDatabase(IOptions<MediaBoxSettings> settings, ILogger<MediaDatabase> logger)
     {
@@ -64,6 +65,7 @@ public class MediaDatabase : IDisposable
         PendingLargeTorrents = new DbCollection<PendingLargeTorrent>(_db, DbLock, "pending_large_torrents", JsonOpts);
         RssFeedSubscriptions = new DbCollection<RssFeedSubscription>(_db, DbLock, "rss_feed_subscriptions", JsonOpts);
         ProcessedFeedItems = new DbCollection<ProcessedFeedItem>(_db, DbLock, "processed_feed_items", JsonOpts);
+        NotifiedDuplicates = new DbCollection<NotifiedDuplicate>(_db, DbLock, "notified_duplicates", JsonOpts);
 
         _logger.LogInformation("SQLite database initialized at {Path}", dbPath);
     }

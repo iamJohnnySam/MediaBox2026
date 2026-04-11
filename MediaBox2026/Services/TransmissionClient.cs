@@ -1,7 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization.Metadata;
+using System.Text.Json.Nodes;
 using MediaBox2026.Models;
 using Microsoft.Extensions.Options;
 
@@ -13,13 +13,13 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
 
     public async Task<bool> AddTorrentAsync(string url, CancellationToken ct = default)
     {
-        var request = new
+        var request = new JsonObject
         {
-            method = "torrent-add",
-            arguments = new
+            ["method"] = "torrent-add",
+            ["arguments"] = new JsonObject
             {
-                filename = url,
-                downloadDir = settings.CurrentValue.DownloadsPath
+                ["filename"] = url,
+                ["download-dir"] = settings.CurrentValue.DownloadsPath
             }
         };
 
@@ -34,12 +34,16 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
 
     public async Task<List<TorrentInfo>> GetTorrentsAsync(CancellationToken ct = default)
     {
-        var request = new
+        var fields = new JsonArray();
+        foreach (var field in new[] { "id", "name", "status", "percentDone", "totalSize", "downloadDir", "addedDate" })
+            fields.Add(JsonValue.Create(field));
+
+        var request = new JsonObject
         {
-            method = "torrent-get",
-            arguments = new
+            ["method"] = "torrent-get",
+            ["arguments"] = new JsonObject
             {
-                fields = new[] { "id", "name", "status", "percentDone", "totalSize", "downloadDir", "addedDate" }
+                ["fields"] = fields
             }
         };
 
@@ -69,13 +73,13 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
 
     public async Task RemoveTorrentAsync(int id, bool deleteData = false, CancellationToken ct = default)
     {
-        var request = new
+        var request = new JsonObject
         {
-            method = "torrent-remove",
-            arguments = new
+            ["method"] = "torrent-remove",
+            ["arguments"] = new JsonObject
             {
-                ids = new[] { id },
-                deleteLocalData = deleteData
+                ["ids"] = new JsonArray { JsonValue.Create(id) },
+                ["delete-local-data"] = deleteData
             }
         };
         await SendRpcAsync(request, ct);
@@ -84,12 +88,12 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
 
     public async Task<bool> PauseTorrentAsync(int id, CancellationToken ct = default)
     {
-        var request = new
+        var request = new JsonObject
         {
-            method = "torrent-stop",
-            arguments = new
+            ["method"] = "torrent-stop",
+            ["arguments"] = new JsonObject
             {
-                ids = new[] { id }
+                ["ids"] = new JsonArray { JsonValue.Create(id) }
             }
         };
         var result = await SendRpcAsync(request, ct);
@@ -103,12 +107,12 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
 
     public async Task<bool> ResumeTorrentAsync(int id, CancellationToken ct = default)
     {
-        var request = new
+        var request = new JsonObject
         {
-            method = "torrent-start",
-            arguments = new
+            ["method"] = "torrent-start",
+            ["arguments"] = new JsonObject
             {
-                ids = new[] { id }
+                ["ids"] = new JsonArray { JsonValue.Create(id) }
             }
         };
         var result = await SendRpcAsync(request, ct);
@@ -120,7 +124,7 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
         return false;
     }
 
-    private async Task<JsonElement?> SendRpcAsync(object request, CancellationToken ct, bool retry = true)
+    private async Task<JsonElement?> SendRpcAsync(JsonObject request, CancellationToken ct, bool retry = true)
     {
         var config = settings.CurrentValue;
         using var http = httpFactory.CreateClient();
@@ -134,8 +138,8 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
         if (_sessionId != null)
             http.DefaultRequestHeaders.Add("X-Transmission-Session-Id", _sessionId);
 
-        var jsonOpts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.KebabCaseLower, TypeInfoResolver = new DefaultJsonTypeInfoResolver() };
-        var json = JsonSerializer.Serialize(request, jsonOpts);
+        var json = request.ToJsonString();
+        logger.LogInformation("Transmission RPC request: {Json}", json);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
 
         var response = await http.PostAsync(config.TransmissionRpcUrl, content, ct);
@@ -165,7 +169,7 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
         if (root.TryGetProperty("result", out var resultProp) && resultProp.GetString() == "success")
             return root;
 
-        logger.LogWarning("Transmission RPC returned: {Result}", root.GetProperty("result").GetString());
+        logger.LogWarning("Transmission RPC returned: {Result}. Response body: {Body}", root.GetProperty("result").GetString(), body);
         return null;
     }
 }

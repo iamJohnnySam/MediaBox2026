@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using MediaBox2026.Models;
+using Microsoft.Extensions.Options;
 
 namespace MediaBox2026.Services;
 
@@ -7,6 +9,7 @@ public class TelegramAuthStore
 {
     private readonly string _filePath;
     private readonly ILogger<TelegramAuthStore> _logger;
+    private readonly IOptionsMonitor<MediaBoxSettings> _settings;
     private readonly object _lock = new();
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -15,14 +18,24 @@ public class TelegramAuthStore
         TypeInfoResolver = new DefaultJsonTypeInfoResolver()
     };
 
-    public TelegramAuthStore(ILogger<TelegramAuthStore> logger)
+    public TelegramAuthStore(ILogger<TelegramAuthStore> logger, IOptionsMonitor<MediaBoxSettings> settings)
     {
         _logger = logger;
+        _settings = settings;
         _filePath = Path.Combine(AppContext.BaseDirectory, "telegram-auth.json");
     }
 
     public long? GetChatId()
     {
+        // First check if chat ID is configured in settings
+        var configuredChatId = _settings.CurrentValue.TelegramChatId;
+        if (configuredChatId.HasValue)
+        {
+            _logger.LogInformation("Using configured Telegram chat ID from settings: {ChatId}", configuredChatId.Value);
+            return configuredChatId.Value;
+        }
+
+        // Fall back to reading from file
         lock (_lock)
         {
             if (!File.Exists(_filePath)) return null;

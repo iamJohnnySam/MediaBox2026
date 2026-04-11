@@ -109,6 +109,14 @@ public class TelegramSession
     public DateTime AuthenticatedDate { get; set; }
 }
 
+public class NotifiedDuplicate : IEntity
+{
+    public int Id { get; set; }
+    public string ShowName { get; set; } = "";
+    public string FolderNames { get; set; } = "";
+    public DateTime NotifiedDate { get; set; }
+}
+
 public class TorrentInfo
 {
     public int Id { get; set; }
@@ -147,6 +155,7 @@ public class ParsedMediaInfo
 public class MediaBoxSettings
 {
     public string TelegramBotToken { get; set; } = "";
+    public long? TelegramChatId { get; set; }
     public string AuthPassword { get; set; } = "changeme";
 
     public string TvShowsPath { get; set; } = "/molecule/Media/TVShows";

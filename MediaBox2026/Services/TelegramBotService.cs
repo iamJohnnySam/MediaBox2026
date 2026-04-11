@@ -17,7 +17,7 @@ public interface ITelegramNotifier
 
 public class TelegramBotService(
     MediaDatabase db,
-    MediaCatalogService catalog,
+    IServiceProvider serviceProvider,
     TransmissionClient transmission,
     TelegramAuthStore authStore,
     MediaBoxState state,
@@ -318,6 +318,7 @@ public class TelegramBotService(
 
             case "/scan":
                 await SendToChatAsync(chatId, "🔍 Starting media scan...", ct);
+                var catalog = serviceProvider.GetRequiredService<MediaCatalogService>();
                 await catalog.ScanAllAsync(ct);
                 await SendToChatAsync(chatId, $"✅ Scan complete. TV: {state.TvShowCount}, Movies: {state.MovieCount}", ct);
                 break;

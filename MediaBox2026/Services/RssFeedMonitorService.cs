@@ -74,20 +74,28 @@ public class RssFeedMonitorService(
             var parsed = FileNameParser.Parse(title);
             if (!parsed.IsTvShow) continue;
 
-            var existingShow = catalog.FindTvShow(parsed.CleanName);
+            var existingShow = catalog.FindTvShow(parsed.CleanName, parsed.Year);
             if (existingShow != null)
             {
+                logger.LogDebug("Found existing show: {ShowName}, Latest Season: {Season}", existingShow.Name, existingShow.LatestSeason);
+
                 if (parsed.Season!.Value < existingShow.LatestSeason)
                 {
+                    logger.LogInformation("Skipping old season: {Title} (S{Season} < S{LatestSeason})", title, parsed.Season.Value, existingShow.LatestSeason);
                     MarkProcessed(guid, title);
                     continue;
                 }
 
-                if (catalog.HasEpisode(parsed.CleanName, parsed.Season.Value, parsed.Episode!.Value))
+                if (catalog.HasEpisode(parsed.CleanName, parsed.Season.Value, parsed.Episode!.Value, parsed.Year))
                 {
+                    logger.LogInformation("Skipping existing episode: {Title} (already have S{Season}E{Episode})", title, parsed.Season.Value, parsed.Episode.Value);
                     MarkProcessed(guid, title);
                     continue;
                 }
+            }
+            else
+            {
+                logger.LogDebug("No existing show found for: {CleanName}", parsed.CleanName);
             }
 
             // Already dispatched to Transmission for this episode — skip duplicates from different release groups

@@ -2,6 +2,8 @@ using MediaBox2026.Components;
 using MediaBox2026.Models;
 using MediaBox2026.Services;
 using Microsoft.AspNetCore.Components;
+using Serilog;
+using Serilog.Events;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -11,6 +13,29 @@ builder.WebHost.UseUrls("http://0.0.0.0:5000");
 // Use AppContext.BaseDirectory so the file is found next to the binary regardless of CWD
 var secretsPath = Path.Combine(AppContext.BaseDirectory, "appsettings.Secrets.json");
 builder.Configuration.AddJsonFile(secretsPath, optional: true, reloadOnChange: true);
+
+// Configure Serilog for file logging with daily rotation
+// Logs are saved in: Logs/YYYY/MM/mediabox-YYYYMMDD.log
+var logsPath = Path.Combine(AppContext.BaseDirectory, "Logs");
+Directory.CreateDirectory(logsPath);
+
+Log.Logger = new LoggerConfiguration()
+	.MinimumLevel.Information()
+	.MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
+	.Enrich.FromLogContext()
+	.WriteTo.Console()
+	.WriteTo.File(
+		path: Path.Combine(logsPath, DateTime.Now.ToString("yyyy"), DateTime.Now.ToString("MM"), $"mediabox-.log"),
+		rollingInterval: RollingInterval.Day,
+		retainedFileCountLimit: 31,
+		outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
+		fileSizeLimitBytes: 100_000_000, // 100MB per file
+		rollOnFileSizeLimit: true,
+		shared: false,
+		flushToDiskInterval: TimeSpan.FromSeconds(1))
+	.CreateLogger();
+
+builder.Host.UseSerilog();
 
 // In-memory log sink for Blazor log viewer
 var logSink = new InMemoryLogSink();
@@ -117,4 +142,18 @@ TaskScheduler.UnobservedTaskException += (_, e) =>
 	e.SetObserved();
 };
 
-app.Run();
+try
+{
+	Log.Information("MediaBox2026 starting up...");
+	app.Run();
+}
+catch (Exception ex)
+{
+	Log.Fatal(ex, "MediaBox2026 failed to start");
+	throw;
+}
+finally
+{
+	Log.Information("MediaBox2026 shutting down...");
+	await Log.CloseAndFlushAsync();
+}
