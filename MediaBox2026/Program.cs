@@ -1,6 +1,7 @@
 using MediaBox2026.Components;
 using MediaBox2026.Models;
 using MediaBox2026.Services;
+using Microsoft.AspNetCore.Components;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -68,6 +69,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<TelegramBotService
 // Background services
 builder.Services.AddHostedService<MediaScannerService>();
 builder.Services.AddHostedService<RssFeedMonitorService>();
+builder.Services.AddHostedService<NewsRssFeedService>();
 builder.Services.AddHostedService<TransmissionMonitorService>();
 builder.Services.AddHostedService<DownloadOrganizerService>();
 builder.Services.AddHostedService<MovieWatchlistService>();
@@ -81,6 +83,7 @@ builder.Services.Configure<HostOptions>(opts =>
 	opts.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore);
 
 // Blazor
+builder.Services.AddSingleton<IComponentActivator, FallbackComponentActivator>();
 builder.Services.AddRazorComponents()
 	.AddInteractiveServerComponents();
 

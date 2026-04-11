@@ -70,8 +70,9 @@ public class TelegramBotService(
             logger.LogWarning("No authenticated Telegram chat. Message not sent: {Text}", text);
             return;
         }
-        await SendToChatAsync(chatId.Value, text, ct);
+        await SendToChatAsync(chatId.Value, text, ct, parseMode: "Markdown");
     }
+
 
     public async Task SendInlineKeyboardAsync(string text, List<List<InlineButton>> buttons, CancellationToken ct = default)
     {
@@ -216,6 +217,9 @@ public class TelegramBotService(
                     "/add Movie Name - Quick add to watchlist\n" +
                     "/remove Movie Name - Remove from watchlist\n" +
                     "/scan - Trigger media scan\n" +
+                    "/feeds - List RSS subscriptions\n" +
+                    "/subscribe <url> <name> - Subscribe to RSS feed\n" +
+                    "/unsubscribe <name> - Unsubscribe from feed\n" +
                     "/help - Show this message",
                     ct, parseMode: "Markdown");
                 break;
@@ -318,6 +322,102 @@ public class TelegramBotService(
                 await SendToChatAsync(chatId, $"✅ Scan complete. TV: {state.TvShowCount}, Movies: {state.MovieCount}", ct);
                 break;
 
+            case "/feeds":
+                var feeds = db.RssFeedSubscriptions.Find(f => f.IsActive).ToList();
+                if (feeds.Count == 0)
+                {
+                    await SendToChatAsync(chatId, "No RSS feeds subscribed.", ct);
+                }
+                else
+                {
+                    var sb = new StringBuilder("📰 *RSS Subscriptions:*\n\n");
+                    foreach (var feed in feeds)
+                    {
+                        var lastChecked = feed.LastChecked.HasValue
+                            ? feed.LastChecked.Value.ToString("g")
+                            : "Never";
+                        sb.AppendLine($"• *{feed.FeedName}*");
+                        sb.AppendLine($"  URL: {feed.FeedUrl}");
+                        sb.AppendLine($"  Last checked: {lastChecked}");
+                        sb.AppendLine();
+                    }
+                    await SendToChatAsync(chatId, sb.ToString(), ct, parseMode: "Markdown");
+                }
+                break;
+
+            case "/subscribe":
+                if (string.IsNullOrWhiteSpace(arg))
+                {
+                    await SendToChatAsync(chatId, "Usage: /subscribe <url> <name>\n\nExample:\n/subscribe https://example.com/feed.xml My News Feed", ct);
+                    break;
+                }
+                var subscribeParts = arg.Split(' ', 2);
+                if (subscribeParts.Length < 2)
+                {
+                    await SendToChatAsync(chatId, "Please provide both URL and name.\n\nUsage: /subscribe <url> <name>", ct);
+                    break;
+                }
+                var subscribeUrl = subscribeParts[0].Trim();
+                var subscribeName = subscribeParts[1].Trim();
+
+                if (!Uri.TryCreate(subscribeUrl, UriKind.Absolute, out _))
+                {
+                    await SendToChatAsync(chatId, "❌ Invalid URL format.", ct);
+                    break;
+                }
+
+                var existingFeed = db.RssFeedSubscriptions.FindOne(f => f.FeedUrl == subscribeUrl);
+                if (existingFeed != null)
+                {
+                    if (existingFeed.IsActive)
+                    {
+                        await SendToChatAsync(chatId, $"ℹ️ Already subscribed to this feed as '{existingFeed.FeedName}'.", ct);
+                    }
+                    else
+                    {
+                        existingFeed.IsActive = true;
+                        existingFeed.FeedName = subscribeName;
+                        db.RssFeedSubscriptions.Update(existingFeed);
+                        await SendToChatAsync(chatId, $"✅ Re-activated subscription: {subscribeName}", ct);
+                        state.AddActivity($"RSS feed re-activated: {subscribeName}");
+                    }
+                    break;
+                }
+
+                db.RssFeedSubscriptions.Insert(new RssFeedSubscription
+                {
+                    FeedUrl = subscribeUrl,
+                    FeedName = subscribeName,
+                    SubscribedDate = DateTime.UtcNow,
+                    IsActive = true
+                });
+                await SendToChatAsync(chatId, $"✅ Subscribed to: {subscribeName}\n\nYou'll receive notifications when new items are published.", ct);
+                state.AddActivity($"RSS feed subscribed: {subscribeName}");
+                logger.LogInformation("Subscribed to RSS feed: {Name} - {Url}", subscribeName, subscribeUrl);
+                break;
+
+            case "/unsubscribe":
+                if (string.IsNullOrWhiteSpace(arg))
+                {
+                    await SendToChatAsync(chatId, "Usage: /unsubscribe <name>\n\nUse /feeds to see your subscriptions.", ct);
+                    break;
+                }
+                var feedToRemove = db.RssFeedSubscriptions.FindOne(f =>
+                    f.IsActive && f.FeedName.Contains(arg, StringComparison.OrdinalIgnoreCase));
+                if (feedToRemove != null)
+                {
+                    feedToRemove.IsActive = false;
+                    db.RssFeedSubscriptions.Update(feedToRemove);
+                    await SendToChatAsync(chatId, $"✅ Unsubscribed from: {feedToRemove.FeedName}", ct);
+                    state.AddActivity($"RSS feed unsubscribed: {feedToRemove.FeedName}");
+                    logger.LogInformation("Unsubscribed from RSS feed: {Name}", feedToRemove.FeedName);
+                }
+                else
+                {
+                    await SendToChatAsync(chatId, $"❌ Feed not found: {arg}\n\nUse /feeds to see your subscriptions.", ct);
+                }
+                break;
+
             default:
                 await SendToChatAsync(chatId, "Unknown command. Use /help for available commands.", ct);
                 break;
@@ -399,10 +499,12 @@ public class TelegramBotService(
                 return;
             }
 
-            var json = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
+            var jsonText = await response.Content.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(jsonText);
+            var json = doc.RootElement;
             if (!json.TryGetProperty("data", out var data) ||
                 !data.TryGetProperty("movies", out var movies) ||
-                movies.GetArrayLength() == 0)
+                movies.ValueKind != JsonValueKind.Array || movies.GetArrayLength() == 0)
             {
                 await SendToChatAsync(chatId, $"❌ No movies found for \"{query}\". Try a different search term.", ct);
                 return;

@@ -23,8 +23,10 @@ public static partial class FileNameParser
         "HDTV", "WEB-DL", "WEBRip", "WEB", "x264", "x265", "HEVC",
         "H264", "H265", "AAC", "AC3", "DTS", "PROPER", "INTERNAL",
         "REAL", "Dir Cut", "IMAX", "EDITION", "Ep.", "XviD", "YIFY",
-        "RARBG", "EVO", "FGT", "SPARKS", "GECKOS", "www.torrenting.com"
-    ];
+        "RARBG", "EVO", "FGT", "SPARKS", "GECKOS", "www.torrenting.com",
+		"www.UIndex.org - ", "www.UIndex.org", ".org", "www.", "torrenting.com", 
+        "UIndex.org"
+	];
 
     public static ParsedMediaInfo Parse(string fileName)
     {

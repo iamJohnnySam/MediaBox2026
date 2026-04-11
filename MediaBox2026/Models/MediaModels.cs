@@ -117,6 +117,7 @@ public class TorrentInfo
     public int Status { get; set; }
     public long TotalSize { get; set; }
     public string? DownloadDir { get; set; }
+    public long DateAdded { get; set; }
     public bool IsFinished => PercentDone >= 1.0;
 
     public string StatusText => Status switch
@@ -198,6 +199,24 @@ public class DispatchedEpisode : IEntity
     public DateTime DispatchedDate { get; set; }
 }
 
+public class PendingLargeTorrent : IEntity
+{
+    public int Id { get; set; }
+    public int TorrentId { get; set; }
+    public string TorrentName { get; set; } = "";
+    public long TotalSize { get; set; }
+    public DateTime AddedDate { get; set; }
+    public bool AskedUser { get; set; }
+    public LargeTorrentStatus Status { get; set; } = LargeTorrentStatus.Paused;
+}
+
+public enum LargeTorrentStatus
+{
+    Paused,
+    Approved,
+    Rejected
+}
+
 public class LogEntry
 {
     public DateTime Timestamp { get; set; }
@@ -211,4 +230,23 @@ public class InlineButton
 {
     public string Text { get; set; } = "";
     public string CallbackData { get; set; } = "";
+}
+
+public class RssFeedSubscription : IEntity
+{
+    public int Id { get; set; }
+    public string FeedUrl { get; set; } = "";
+    public string FeedName { get; set; } = "";
+    public DateTime SubscribedDate { get; set; }
+    public DateTime? LastChecked { get; set; }
+    public bool IsActive { get; set; } = true;
+}
+
+public class ProcessedFeedItem : IEntity
+{
+    public int Id { get; set; }
+    public int SubscriptionId { get; set; }
+    public string ItemGuid { get; set; } = "";
+    public string Title { get; set; } = "";
+    public DateTime ProcessedDate { get; set; }
 }

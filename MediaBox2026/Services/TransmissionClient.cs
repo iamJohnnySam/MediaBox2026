@@ -39,7 +39,7 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
             method = "torrent-get",
             arguments = new
             {
-                fields = new[] { "id", "name", "status", "percentDone", "totalSize", "downloadDir" }
+                fields = new[] { "id", "name", "status", "percentDone", "totalSize", "downloadDir", "addedDate" }
             }
         };
 
@@ -59,7 +59,8 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
                     Status = t.GetProperty("status").GetInt32(),
                     PercentDone = t.GetProperty("percentDone").GetDouble(),
                     TotalSize = t.GetProperty("totalSize").GetInt64(),
-                    DownloadDir = t.TryGetProperty("downloadDir", out var dd) ? dd.GetString() : null
+                    DownloadDir = t.TryGetProperty("downloadDir", out var dd) ? dd.GetString() : null,
+                    DateAdded = t.TryGetProperty("addedDate", out var da) ? da.GetInt64() : 0
                 });
             }
         }
@@ -79,6 +80,44 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
         };
         await SendRpcAsync(request, ct);
         logger.LogInformation("Torrent removed: {Id} (deleteData: {Delete})", id, deleteData);
+    }
+
+    public async Task<bool> PauseTorrentAsync(int id, CancellationToken ct = default)
+    {
+        var request = new
+        {
+            method = "torrent-stop",
+            arguments = new
+            {
+                ids = new[] { id }
+            }
+        };
+        var result = await SendRpcAsync(request, ct);
+        if (result != null)
+        {
+            logger.LogInformation("Torrent paused: {Id}", id);
+            return true;
+        }
+        return false;
+    }
+
+    public async Task<bool> ResumeTorrentAsync(int id, CancellationToken ct = default)
+    {
+        var request = new
+        {
+            method = "torrent-start",
+            arguments = new
+            {
+                ids = new[] { id }
+            }
+        };
+        var result = await SendRpcAsync(request, ct);
+        if (result != null)
+        {
+            logger.LogInformation("Torrent resumed: {Id}", id);
+            return true;
+        }
+        return false;
     }
 
     private async Task<JsonElement?> SendRpcAsync(object request, CancellationToken ct, bool retry = true)

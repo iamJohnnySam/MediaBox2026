@@ -26,6 +26,9 @@ public class MediaDatabase : IDisposable
     public DbCollection<PendingDownload> PendingDownloads { get; }
     public DbCollection<ProcessedRssItem> ProcessedRssItems { get; }
     public DbCollection<DispatchedEpisode> DispatchedEpisodes { get; }
+    public DbCollection<PendingLargeTorrent> PendingLargeTorrents { get; }
+    public DbCollection<RssFeedSubscription> RssFeedSubscriptions { get; }
+    public DbCollection<ProcessedFeedItem> ProcessedFeedItems { get; }
 
     public MediaDatabase(IOptions<MediaBoxSettings> settings, ILogger<MediaDatabase> logger)
     {
@@ -58,6 +61,9 @@ public class MediaDatabase : IDisposable
         PendingDownloads = new DbCollection<PendingDownload>(_db, DbLock, "pending", JsonOpts);
         ProcessedRssItems = new DbCollection<ProcessedRssItem>(_db, DbLock, "rss_processed", JsonOpts);
         DispatchedEpisodes = new DbCollection<DispatchedEpisode>(_db, DbLock, "dispatched", JsonOpts);
+        PendingLargeTorrents = new DbCollection<PendingLargeTorrent>(_db, DbLock, "pending_large_torrents", JsonOpts);
+        RssFeedSubscriptions = new DbCollection<RssFeedSubscription>(_db, DbLock, "rss_feed_subscriptions", JsonOpts);
+        ProcessedFeedItems = new DbCollection<ProcessedFeedItem>(_db, DbLock, "processed_feed_items", JsonOpts);
 
         _logger.LogInformation("SQLite database initialized at {Path}", dbPath);
     }
