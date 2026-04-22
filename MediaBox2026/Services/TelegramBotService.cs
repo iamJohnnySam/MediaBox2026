@@ -248,6 +248,7 @@ public class TelegramBotService(
                     "/feeds - List RSS subscriptions\n" +
                     "/subscribe <url> <name> - Subscribe to RSS feed\n" +
                     "/unsubscribe <name> - Unsubscribe from feed\n" +
+                    "/resetquality - Reset & rescan quality notifications\n" +
                     "/help - Show this message",
                     ct, parseMode: "Markdown");
                 break;
@@ -444,6 +445,64 @@ public class TelegramBotService(
                 else
                 {
                     await SendToChatAsync(chatId, $"❌ Feed not found: {arg}\n\nUse /feeds to see your subscriptions.", ct);
+                }
+                break;
+
+            case "/resetquality":
+                await SendToChatAsync(chatId, "🔄 Resetting quality download notifications...\n\nThis will:\n1. Clear all pending quality requests\n2. Re-scan RSS feed\n3. Send fresh notifications for high-quality items\n\nPlease wait...", ct);
+
+                try
+                {
+                    // Get count before reset
+                    var beforeCount = db.PendingDownloads.Count(p => p.Status == PendingStatus.WaitingForQuality);
+
+                    // Clear all pending quality downloads
+                    var pendingItems = db.PendingDownloads
+                        .Find(p => p.Status == PendingStatus.WaitingForQuality)
+                        .ToList();
+
+                    foreach (var item in pendingItems)
+                    {
+                        item.Status = PendingStatus.Rejected;
+                        db.PendingDownloads.Update(item);
+                        logger.LogInformation("Reset pending quality item: {Title}", item.RssTitle);
+                    }
+
+                    // Clear processed RSS items so they'll be re-scanned
+                    var processedGuids = pendingItems
+                        .Select(p => p.RssTitle)
+                        .Distinct()
+                        .ToList();
+
+                    int clearedRssItems = 0;
+                    foreach (var title in processedGuids)
+                    {
+                        var deleted = db.ProcessedRssItems.DeleteMany(r => r.Title == title);
+                        clearedRssItems += deleted;
+                        logger.LogDebug("Cleared {Count} RSS items for: {Title}", deleted, title);
+                    }
+
+                    state.AddActivity($"Reset {beforeCount} quality notifications");
+                    logger.LogInformation("Reset {Count} pending quality downloads and {RssCount} RSS items", beforeCount, clearedRssItems);
+
+                    await SendToChatAsync(chatId, $"✅ Cleared {beforeCount} pending notification(s)\n\n🔍 Triggering RSS feed scan...", ct);
+
+                    // Trigger RSS feed scan
+                    var rssMonitor = serviceProvider.GetService<RssFeedMonitorService>();
+                    if (rssMonitor != null)
+                    {
+                        await rssMonitor.TriggerCheckAsync(ct);
+                        await SendToChatAsync(chatId, "✅ RSS scan complete!\n\nNew quality notifications will be sent after the wait period (if any high-quality items are found).", ct);
+                    }
+                    else
+                    {
+                        await SendToChatAsync(chatId, "⚠️ RSS monitor service not available. The feed will be checked automatically on the next scheduled scan.", ct);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error resetting quality notifications");
+                    await SendToChatAsync(chatId, $"❌ Error resetting notifications: {ex.Message}", ct);
                 }
                 break;
 

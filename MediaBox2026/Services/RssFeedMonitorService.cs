@@ -93,6 +93,27 @@ public class RssFeedMonitorService(
         logger.LogInformation("🛑 RSS feed monitor stopped");
     }
 
+    /// <summary>
+    /// Manually trigger a RSS feed check and quality approval check (can be called from Telegram commands)
+    /// </summary>
+    public async Task TriggerCheckAsync(CancellationToken ct = default)
+    {
+        logger.LogInformation("🔄 Manual RSS feed check triggered");
+        try
+        {
+            await CheckFeedAsync(ct);
+            await CheckPendingQualityAsync(ct);
+            state.LastRssCheck = DateTime.Now;
+            state.NotifyChange();
+            logger.LogInformation("✅ Manual RSS feed check completed");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "❌ Error during manual RSS feed check");
+            throw;
+        }
+    }
+
     private async Task CheckFeedAsync(CancellationToken ct)
     {
         var feedUrl = settings.CurrentValue.RssFeedUrl;

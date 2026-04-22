@@ -96,9 +96,12 @@ builder.Services.AddSingleton<TelegramBotService>();
 builder.Services.AddSingleton<ITelegramNotifier>(sp => sp.GetRequiredService<TelegramBotService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<TelegramBotService>());
 
-// Background services
+// RSS Feed Monitor (singleton + hosted service for manual triggering)
+builder.Services.AddSingleton<RssFeedMonitorService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<RssFeedMonitorService>());
+
+// Other background services
 builder.Services.AddHostedService<MediaScannerService>();
-builder.Services.AddHostedService<RssFeedMonitorService>();
 builder.Services.AddHostedService<NewsRssFeedService>();
 builder.Services.AddHostedService<TransmissionMonitorService>();
 builder.Services.AddHostedService<DownloadOrganizerService>();
