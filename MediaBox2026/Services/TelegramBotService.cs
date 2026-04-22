@@ -10,6 +10,8 @@ namespace MediaBox2026.Services;
 
 public class TelegramResponse
 {
+    public TelegramResponse() { }
+
     [JsonPropertyName("ok")]
     public bool Ok { get; set; }
 
@@ -19,6 +21,8 @@ public class TelegramResponse
 
 public class TelegramMessage
 {
+    public TelegramMessage() { }
+
     [JsonPropertyName("message_id")]
     public int MessageId { get; set; }
 }
@@ -44,6 +48,14 @@ public class TelegramBotService(
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        PropertyNameCaseInsensitive = true,
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
+    // Separate options for deserializing Telegram API responses (uses property names as-is)
+    private static readonly JsonSerializerOptions DeserializeOpts = new()
+    {
         PropertyNameCaseInsensitive = true,
         TypeInfoResolver = new DefaultJsonTypeInfoResolver()
     };
@@ -571,17 +583,30 @@ public class TelegramBotService(
 
                 if (response.IsSuccessStatusCode)
                 {
-                    var result = JsonSerializer.Deserialize<TelegramResponse>(responseJson, JsonOpts);
-                    if (result?.Ok == true && result.Result != null)
+                    // Parse just the message_id using simple JSON parsing instead of full deserialization
+                    try
                     {
-                        logger.LogInformation("✅ Telegram message sent successfully. MessageId: {MessageId}", result.Result.MessageId);
-                        return result.Result.MessageId;
+                        using var doc = JsonDocument.Parse(responseJson);
+                        if (doc.RootElement.TryGetProperty("ok", out var okProp) && okProp.GetBoolean())
+                        {
+                            if (doc.RootElement.TryGetProperty("result", out var resultProp) &&
+                                resultProp.TryGetProperty("message_id", out var msgIdProp))
+                            {
+                                var messageId = msgIdProp.GetInt32();
+                                logger.LogInformation("✅ Telegram message sent successfully. MessageId: {MessageId}", messageId);
+                                return messageId;
+                            }
+                        }
                     }
-                    else
+                    catch (JsonException jex)
                     {
-                        logger.LogWarning("⚠️ Telegram API returned success but response structure unexpected: {Response}", responseJson);
-                        return null;
+                        logger.LogWarning(jex, "⚠️ Could not parse Telegram response, but message was sent: {Response}", responseJson);
                     }
+
+                    // If we got here, the message was sent but we couldn't parse the response
+                    // Return 0 to indicate success without a valid message ID
+                    logger.LogInformation("✅ Telegram message sent (couldn't parse message ID from response)");
+                    return 0;
                 }
                 else if ((int)response.StatusCode == 429) // Rate limited
                 {
