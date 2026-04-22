@@ -37,22 +37,52 @@ public class MediaDatabase : IDisposable
         var dbPath = settings.Value.DatabasePath;
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir))
+        {
             Directory.CreateDirectory(dir);
+            logger.LogInformation("Database directory ensured: {Directory}", dir);
+        }
 
         MigrateFromLiteDb(dbPath);
 
-        _db = new SqliteConnection($"Data Source={dbPath}");
-        _db.Open();
+        try
+        {
+            _db = new SqliteConnection($"Data Source={dbPath}");
+            _db.Open();
+            logger.LogInformation("✅ SQLite database connection opened: {Path}", dbPath);
 
-        using (var cmd = _db.CreateCommand())
-        {
-            cmd.CommandText = "PRAGMA journal_mode=WAL";
-            cmd.ExecuteScalar();
+            // Enable WAL mode for better concurrency
+            using (var cmd = _db.CreateCommand())
+            {
+                cmd.CommandText = "PRAGMA journal_mode=WAL";
+                var mode = cmd.ExecuteScalar()?.ToString();
+                logger.LogInformation("Database journal mode: {Mode}", mode);
+            }
+
+            using (var cmd = _db.CreateCommand())
+            {
+                cmd.CommandText = "PRAGMA synchronous=NORMAL";
+                cmd.ExecuteNonQuery();
+            }
+
+            // Verify database integrity
+            using (var cmd = _db.CreateCommand())
+            {
+                cmd.CommandText = "PRAGMA integrity_check";
+                var integrity = cmd.ExecuteScalar()?.ToString();
+                if (integrity != "ok")
+                {
+                    logger.LogWarning("⚠️ Database integrity check: {Result}", integrity);
+                }
+                else
+                {
+                    logger.LogInformation("✅ Database integrity verified");
+                }
+            }
         }
-        using (var cmd = _db.CreateCommand())
+        catch (Exception ex)
         {
-            cmd.CommandText = "PRAGMA synchronous=NORMAL";
-            cmd.ExecuteNonQuery();
+            logger.LogCritical(ex, "❌ Failed to initialize database at {Path}", dbPath);
+            throw;
         }
 
         TvShows = new DbCollection<TvShow>(_db, DbLock, "tvshows", JsonOpts);
@@ -67,7 +97,12 @@ public class MediaDatabase : IDisposable
         ProcessedFeedItems = new DbCollection<ProcessedFeedItem>(_db, DbLock, "processed_feed_items", JsonOpts);
         NotifiedDuplicates = new DbCollection<NotifiedDuplicate>(_db, DbLock, "notified_duplicates", JsonOpts);
 
-        _logger.LogInformation("SQLite database initialized at {Path}", dbPath);
+        _logger.LogInformation("📊 Database collections initialized:");
+        _logger.LogInformation("  - TV Shows: {Count}", TvShows.Count());
+        _logger.LogInformation("  - Movies: {Count}", Movies.Count());
+        _logger.LogInformation("  - Pending Downloads: {Count}", PendingDownloads.Count());
+        _logger.LogInformation("  - Watchlist: {Count}", Watchlist.Count());
+        _logger.LogInformation("✅ SQLite database fully initialized at {Path}", dbPath);
     }
 
     private void MigrateFromLiteDb(string dbPath)

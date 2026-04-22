@@ -80,8 +80,11 @@ public class PendingDownload : IEntity
     public int Season { get; set; }
     public int Episode { get; set; }
     public DateTime FirstSeen { get; set; }
+    public DateTime? RssPublishDate { get; set; }
     public int CheckCount { get; set; }
     public bool AskedUser { get; set; }
+    public DateTime? LastAsked { get; set; }
+    public int? TelegramMessageId { get; set; }
     public PendingStatus Status { get; set; } = PendingStatus.WaitingForQuality;
 }
 

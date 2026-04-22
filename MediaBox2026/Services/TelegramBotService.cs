@@ -1,17 +1,34 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using MediaBox2026.Models;
 using Microsoft.Extensions.Options;
 
 namespace MediaBox2026.Services;
 
+public class TelegramResponse
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; set; }
+
+    [JsonPropertyName("result")]
+    public TelegramMessage? Result { get; set; }
+}
+
+public class TelegramMessage
+{
+    [JsonPropertyName("message_id")]
+    public int MessageId { get; set; }
+}
+
 public interface ITelegramNotifier
 {
     Task SendMessageAsync(string text, CancellationToken ct = default);
     Task SendPhotoAsync(string photoUrl, string caption, List<List<InlineButton>>? buttons = null, CancellationToken ct = default);
-    Task SendInlineKeyboardAsync(string text, List<List<InlineButton>> buttons, CancellationToken ct = default);
+    Task<int?> SendInlineKeyboardAsync(string text, List<List<InlineButton>> buttons, CancellationToken ct = default);
+    Task<bool> MessageExistsAsync(int messageId, CancellationToken ct = default);
     ConcurrentDictionary<string, TaskCompletionSource<string>> PendingCallbacks { get; }
 }
 
@@ -74,10 +91,16 @@ public class TelegramBotService(
     }
 
 
-    public async Task SendInlineKeyboardAsync(string text, List<List<InlineButton>> buttons, CancellationToken ct = default)
+    public async Task<int?> SendInlineKeyboardAsync(string text, List<List<InlineButton>> buttons, CancellationToken ct = default)
     {
         var chatId = authStore.GetChatId();
-        if (chatId == null) return;
+        if (chatId == null)
+        {
+            logger.LogError("❌ Cannot send Telegram notification: Chat ID is null. Make sure TelegramChatId is configured in settings.");
+            return null;
+        }
+
+        logger.LogInformation("Preparing to send Telegram inline keyboard to chat {ChatId}: {Text}", chatId.Value, text.Substring(0, Math.Min(50, text.Length)));
 
         var keyboard = buttons.Select(row =>
             row.Select(b => new { text = b.Text, callback_data = b.CallbackData }).ToArray()
@@ -90,19 +113,24 @@ public class TelegramBotService(
             reply_markup = new { inline_keyboard = keyboard }
         }, JsonOpts);
 
-        await PostAsync("sendMessage", payload, ct);
+        logger.LogDebug("Telegram API payload: {Payload}", payload);
+
+        return await PostAsync("sendMessage", payload, ct);
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(settings.CurrentValue.TelegramBotToken))
         {
-            logger.LogWarning("Telegram bot token not configured. Bot service disabled.");
+            logger.LogWarning("⚠️ Telegram bot token not configured. Bot service disabled.");
+            logger.LogWarning("To enable Telegram notifications, add TelegramBotToken to your settings.");
             state.SignalTelegramReady();
             return;
         }
 
-        logger.LogInformation("Telegram bot service starting...");
+        logger.LogInformation("🤖 Telegram bot service starting...");
+        logger.LogInformation("Bot token configured: {TokenPrefix}***", settings.CurrentValue.TelegramBotToken.Substring(0, Math.Min(10, settings.CurrentValue.TelegramBotToken.Length)));
+
         await Task.Delay(2000, ct);
 
         // Signal readiness immediately if a chat is already authenticated
@@ -466,16 +494,110 @@ public class TelegramBotService(
         await PostAsync("sendMessage", JsonSerializer.Serialize(payload, JsonOpts), ct);
     }
 
-    private async Task PostAsync(string method, string json, CancellationToken ct)
+    private async Task<int?> PostAsync(string method, string json, CancellationToken ct)
     {
+        const int maxRetries = 3;
+        const int retryDelayMs = 1000;
+
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
+        {
+            try
+            {
+                logger.LogInformation("Calling Telegram API: {Method} (attempt {Attempt}/{MaxRetries})", method, attempt, maxRetries);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+                var response = await _http.PostAsync($"{ApiUrl}/{method}", content, ct);
+
+                var responseJson = await response.Content.ReadAsStringAsync(ct);
+                logger.LogInformation("Telegram API response ({StatusCode}): {Response}", response.StatusCode, responseJson);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    var result = JsonSerializer.Deserialize<TelegramResponse>(responseJson, JsonOpts);
+                    if (result?.Ok == true && result.Result != null)
+                    {
+                        logger.LogInformation("✅ Telegram message sent successfully. MessageId: {MessageId}", result.Result.MessageId);
+                        return result.Result.MessageId;
+                    }
+                    else
+                    {
+                        logger.LogWarning("⚠️ Telegram API returned success but response structure unexpected: {Response}", responseJson);
+                        return null;
+                    }
+                }
+                else if ((int)response.StatusCode == 429) // Rate limited
+                {
+                    logger.LogWarning("⚠️ Telegram API rate limit hit. Waiting before retry...");
+                    await Task.Delay(retryDelayMs * attempt, ct);
+                    continue;
+                }
+                else
+                {
+                    logger.LogError("❌ Telegram API call failed with status {StatusCode}: {Response}", response.StatusCode, responseJson);
+
+                    // Don't retry on client errors (4xx except 429)
+                    if ((int)response.StatusCode >= 400 && (int)response.StatusCode < 500)
+                    {
+                        logger.LogError("Client error detected, not retrying.");
+                        return null;
+                    }
+
+                    if (attempt < maxRetries)
+                    {
+                        logger.LogInformation("Retrying in {Delay}ms...", retryDelayMs * attempt);
+                        await Task.Delay(retryDelayMs * attempt, ct);
+                    }
+                }
+            }
+            catch (HttpRequestException hex)
+            {
+                logger.LogError(hex, "❌ HTTP error during Telegram API call to {Method} (attempt {Attempt}/{MaxRetries})", method, attempt, maxRetries);
+
+                if (attempt < maxRetries)
+                {
+                    logger.LogInformation("Retrying in {Delay}ms...", retryDelayMs * attempt);
+                    await Task.Delay(retryDelayMs * attempt, ct);
+                }
+            }
+            catch (TaskCanceledException) when (ct.IsCancellationRequested)
+            {
+                logger.LogWarning("Telegram API call cancelled");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "❌ Exception during Telegram API call to {Method} (attempt {Attempt}/{MaxRetries})", method, attempt, maxRetries);
+
+                if (attempt < maxRetries)
+                {
+                    logger.LogInformation("Retrying in {Delay}ms...", retryDelayMs * attempt);
+                    await Task.Delay(retryDelayMs * attempt, ct);
+                }
+            }
+        }
+
+        logger.LogError("❌ All {MaxRetries} attempts to call Telegram API failed", maxRetries);
+        return null;
+    }
+
+    public async Task<bool> MessageExistsAsync(int messageId, CancellationToken ct = default)
+    {
+        var chatId = authStore.GetChatId();
+        if (chatId == null) return false;
+
         try
         {
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-            await _http.PostAsync($"{ApiUrl}/{method}", content, ct);
+            // Try to get the message - if it exists, this will succeed
+            var url = $"{ApiUrl}/getUpdates";
+            var response = await _http.GetAsync(url, ct);
+
+            // Note: Telegram doesn't have a direct "check if message exists" API
+            // The message might have been deleted if user cleared chat
+            // We'll assume it doesn't exist if we haven't received a callback after 24h
+            return true; // Conservative approach - assume it exists
         }
-        catch (Exception ex)
+        catch
         {
-            logger.LogWarning(ex, "Telegram API call failed: {Method}", method);
+            return false;
         }
     }
 

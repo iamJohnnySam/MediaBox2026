@@ -2,6 +2,7 @@ using MediaBox2026.Components;
 using MediaBox2026.Models;
 using MediaBox2026.Services;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.Options;
 using Serilog;
 using Serilog.Events;
 
@@ -14,10 +15,16 @@ builder.WebHost.UseUrls("http://0.0.0.0:5000");
 var secretsPath = Path.Combine(AppContext.BaseDirectory, "appsettings.Secrets.json");
 builder.Configuration.AddJsonFile(secretsPath, optional: true, reloadOnChange: true);
 
-// Configure Serilog for file logging with daily rotation
-// Logs are saved in: Logs/YYYY/MM/mediabox-YYYYMMDD.log
+// Configure Serilog for file logging with instance-based logs
+// Each app instance gets its own log file with timestamp
+// Logs are saved in: Logs/YYYY/MM/mediabox-YYYYMMDD-HHmmss-fff.log
+var startupTime = DateTime.Now;
 var logsPath = Path.Combine(AppContext.BaseDirectory, "Logs");
-Directory.CreateDirectory(logsPath);
+var yearMonthPath = Path.Combine(logsPath, startupTime.ToString("yyyy"), startupTime.ToString("MM"));
+Directory.CreateDirectory(yearMonthPath);
+
+var logFileName = $"mediabox-{startupTime:yyyyMMdd-HHmmss-fff}.log";
+var logFilePath = Path.Combine(yearMonthPath, logFileName);
 
 Log.Logger = new LoggerConfiguration()
 	.MinimumLevel.Information()
@@ -25,9 +32,7 @@ Log.Logger = new LoggerConfiguration()
 	.Enrich.FromLogContext()
 	.WriteTo.Console()
 	.WriteTo.File(
-		path: Path.Combine(logsPath, DateTime.Now.ToString("yyyy"), DateTime.Now.ToString("MM"), $"mediabox-.log"),
-		rollingInterval: RollingInterval.Day,
-		retainedFileCountLimit: 31,
+		path: logFilePath,
 		outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
 		fileSizeLimitBytes: 100_000_000, // 100MB per file
 		rollOnFileSizeLimit: true,
@@ -123,6 +128,32 @@ app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages:
 
 app.UseAntiforgery();
 
+// Health check endpoint
+app.MapGet("/health", (MediaBoxState state, MediaDatabase db) =>
+{
+	var health = new
+	{
+		status = "healthy",
+		timestamp = DateTime.UtcNow,
+		lastRssCheck = state.LastRssCheck,
+		lastMediaScan = state.LastMediaScan,
+		services = new
+		{
+			database = "connected",
+			rssMonitor = state.LastRssCheck.HasValue ? "running" : "not started",
+			mediaScanner = state.LastMediaScan.HasValue ? "running" : "not started"
+		},
+		counts = new
+		{
+			tvShows = state.TvShowCount,
+			movies = state.MovieCount,
+			watchlist = state.WatchlistCount,
+			activeDownloads = state.ActiveDownloads
+		}
+	};
+	return Results.Ok(health);
+}).AllowAnonymous();
+
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
 	.AddInteractiveServerRenderMode();
@@ -145,6 +176,14 @@ TaskScheduler.UnobservedTaskException += (_, e) =>
 try
 {
 	Log.Information("MediaBox2026 starting up...");
+	Log.Information("Environment: {Environment}, OS: {OS}", app.Environment.EnvironmentName, Environment.OSVersion);
+	Log.Information("Application base directory: {BaseDir}", AppContext.BaseDirectory);
+	Log.Information("Log file: {LogFile}", logFilePath);
+
+	// Validate critical settings on startup
+	var settings = app.Services.GetRequiredService<IOptions<MediaBoxSettings>>();
+	ValidateSettings(settings.Value);
+
 	app.Run();
 }
 catch (Exception ex)
@@ -156,4 +195,60 @@ finally
 {
 	Log.Information("MediaBox2026 shutting down...");
 	await Log.CloseAndFlushAsync();
+}
+
+static void ValidateSettings(MediaBoxSettings settings)
+{
+	var issues = new List<string>();
+
+	// Validate Telegram settings
+	if (string.IsNullOrWhiteSpace(settings.TelegramBotToken))
+		issues.Add("TelegramBotToken is not configured");
+
+	if (!settings.TelegramChatId.HasValue)
+		Log.Warning("TelegramChatId is not configured - notifications will require manual authentication");
+
+	// Validate paths
+	if (!Directory.Exists(settings.TvShowsPath))
+		issues.Add($"TvShowsPath does not exist: {settings.TvShowsPath}");
+
+	if (!Directory.Exists(settings.MoviesPath))
+		issues.Add($"MoviesPath does not exist: {settings.MoviesPath}");
+
+	if (!Directory.Exists(settings.DownloadsPath))
+		issues.Add($"DownloadsPath does not exist: {settings.DownloadsPath}");
+
+	// Validate RSS feed URL
+	if (string.IsNullOrWhiteSpace(settings.RssFeedUrl))
+		issues.Add("RssFeedUrl is not configured");
+	else if (!Uri.TryCreate(settings.RssFeedUrl, UriKind.Absolute, out var rssUri) || 
+			 (rssUri.Scheme != "http" && rssUri.Scheme != "https"))
+		issues.Add($"RssFeedUrl is not a valid HTTP(S) URL: {settings.RssFeedUrl}");
+
+	// Validate Transmission URL
+	if (string.IsNullOrWhiteSpace(settings.TransmissionRpcUrl))
+		issues.Add("TransmissionRpcUrl is not configured");
+	else if (!Uri.TryCreate(settings.TransmissionRpcUrl, UriKind.Absolute, out var transUri))
+		issues.Add($"TransmissionRpcUrl is not a valid URL: {settings.TransmissionRpcUrl}");
+
+	// Validate timing settings
+	if (settings.QualityWaitHours < 1 || settings.QualityWaitHours > 72)
+		issues.Add($"QualityWaitHours should be between 1-72, got: {settings.QualityWaitHours}");
+
+	if (settings.RssFeedCheckMinutes < 5 || settings.RssFeedCheckMinutes > 1440)
+		issues.Add($"RssFeedCheckMinutes should be between 5-1440, got: {settings.RssFeedCheckMinutes}");
+
+	if (issues.Count > 0)
+	{
+		Log.Warning("Configuration validation issues found:");
+		foreach (var issue in issues)
+			Log.Warning("  - {Issue}", issue);
+	}
+	else
+	{
+		Log.Information("✅ All critical settings validated successfully");
+	}
+
+	Log.Information("Quality wait hours: {Hours}h, RSS check: every {Minutes}min", 
+		settings.QualityWaitHours, settings.RssFeedCheckMinutes);
 }

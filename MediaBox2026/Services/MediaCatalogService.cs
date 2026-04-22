@@ -176,18 +176,11 @@ public class MediaCatalogService(
                 formatCounts[FileNameParser.YearFormat.Space]++;
         }
 
-        _preferredYearFormat = formatCounts.OrderByDescending(x => x.Value).First().Key;
+        // Always use parentheses format for consistency
+        _preferredYearFormat = FileNameParser.YearFormat.Parentheses;
 
-        var formatName = _preferredYearFormat switch
-        {
-            FileNameParser.YearFormat.Parentheses => "parentheses (2023)",
-            FileNameParser.YearFormat.Brackets => "brackets [2023]",
-            FileNameParser.YearFormat.Space => "space 2023",
-            _ => "unknown"
-        };
-
-        logger.LogInformation("Detected preferred year format: {Format} ({Parentheses} parentheses, {Brackets} brackets, {Space} space)",
-            formatName, formatCounts[FileNameParser.YearFormat.Parentheses], 
+        logger.LogInformation("Using standard year format: Name (Year) - Current library has {Parentheses} parentheses, {Brackets} brackets, {Space} space format folders",
+            formatCounts[FileNameParser.YearFormat.Parentheses], 
             formatCounts[FileNameParser.YearFormat.Brackets], 
             formatCounts[FileNameParser.YearFormat.Space]);
     }
