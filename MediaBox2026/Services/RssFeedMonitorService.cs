@@ -256,7 +256,11 @@ public class RssFeedMonitorService(
 
                 if (existing == null)
                 {
-                    db.PendingDownloads.Insert(new PendingDownload
+                    var rssPublishDate = pubDate ?? DateTime.UtcNow;
+                    var waitHours = settings.CurrentValue.QualityWaitHours;
+                    var elapsed = DateTime.UtcNow - rssPublishDate;
+
+                    var newPending = new PendingDownload
                     {
                         RssTitle = title,
                         TorrentUrl = torrentUrl,
@@ -265,12 +269,38 @@ public class RssFeedMonitorService(
                         Season = parsed.Season!.Value,
                         Episode = parsed.Episode!.Value,
                         FirstSeen = DateTime.UtcNow,
-                        RssPublishDate = pubDate ?? DateTime.UtcNow,
+                        RssPublishDate = rssPublishDate,
                         CheckCount = 1,
                         Status = PendingStatus.WaitingForQuality
-                    });
-                    logger.LogInformation("⏳ Quality too high ({Quality}), added to pending downloads: {Title}", quality, title);
-                    logger.LogInformation("Will ask user about this download after {Hours}h wait period", settings.CurrentValue.QualityWaitHours);
+                    };
+                    db.PendingDownloads.Insert(newPending);
+
+                    // If episode is already past wait period, trigger immediate notification
+                    if (elapsed.TotalHours >= waitHours)
+                    {
+                        logger.LogInformation("📱 Quality too high ({Quality}), but episode published {Hours:F1}h ago (>{Wait}h wait period). Will notify immediately: {Title}", 
+                            quality, elapsed.TotalHours, waitHours, title);
+
+                        // Check if already in library or dispatched before notifying
+                        bool alreadyHave = catalog.HasEpisode(parsed.CleanName, parsed.Season!.Value, parsed.Episode!.Value, null) ||
+                                         db.DispatchedEpisodes.Exists(d => d.ShowName == parsed.CleanName && d.Season == parsed.Season && d.Episode == parsed.Episode);
+
+                        if (!alreadyHave)
+                        {
+                            await SendImmediateQualityNotificationAsync(newPending, ct);
+                        }
+                        else
+                        {
+                            logger.LogInformation("✅ Episode already in library/dispatched, skipping notification: {Title}", title);
+                            newPending.Status = PendingStatus.Downloaded;
+                            db.PendingDownloads.Update(newPending);
+                        }
+                    }
+                    else
+                    {
+                        logger.LogInformation("⏳ Quality too high ({Quality}), added to pending downloads: {Title}", quality, title);
+                        logger.LogInformation("Will ask user about this download after {Hours}h wait period ({Elapsed:F1}h elapsed so far)", waitHours, elapsed.TotalHours);
+                    }
                 }
                 else
                 {
@@ -406,13 +436,29 @@ public class RssFeedMonitorService(
                         var result = await tcs.Task.WaitAsync(cts.Token);
                         telegram.PendingCallbacks.TryRemove(callbackId, out _);
 
+                        logger.LogInformation("User response received for {Title}: {Result}", item.RssTitle, result);
+
                         if (result == "yes")
                         {
                             var added = await transmission.AddTorrentAsync(item.TorrentUrl, ct);
                             if (added)
                             {
                                 item.Status = PendingStatus.Downloaded;
-                                await telegram.SendMessageAsync($"📥 Downloading: {item.RssTitle}", ct);
+
+                                // Edit the original message to show it was accepted
+                                if (item.TelegramMessageId.HasValue)
+                                {
+                                    logger.LogInformation("Editing message {MessageId} to show acceptance for {Title}", item.TelegramMessageId.Value, item.RssTitle);
+                                    await telegram.EditMessageAsync(
+                                        item.TelegramMessageId.Value,
+                                        $"✅ ACCEPTED\n\n{item.RssTitle}\nDownload started.",
+                                        ct);
+                                }
+                                else
+                                {
+                                    logger.LogWarning("No message ID available to edit for {Title}", item.RssTitle);
+                                }
+
                                 state.AddActivity($"Quality-approved download: {item.RssTitle}");
                                 db.DispatchedEpisodes.Insert(new DispatchedEpisode
                                 {
@@ -426,11 +472,26 @@ public class RssFeedMonitorService(
                         else
                         {
                             item.Status = PendingStatus.Rejected;
+
+                            // Edit the original message to show it was rejected
+                            if (item.TelegramMessageId.HasValue)
+                            {
+                                logger.LogInformation("Editing message {MessageId} to show rejection for {Title}", item.TelegramMessageId.Value, item.RssTitle);
+                                await telegram.EditMessageAsync(
+                                    item.TelegramMessageId.Value,
+                                    $"❌ REJECTED\n\n{item.RssTitle}\nDownload cancelled.",
+                                    ct);
+                            }
+                            else
+                            {
+                                logger.LogWarning("No message ID available to edit for {Title}", item.RssTitle);
+                            }
                         }
                         db.PendingDownloads.Update(item);
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        logger.LogError(ex, "Error handling user response for {Title}", item.RssTitle);
                         telegram.PendingCallbacks.TryRemove(callbackId, out _);
                     }
                 }, ct);
@@ -443,6 +504,121 @@ public class RssFeedMonitorService(
 
         logger.LogInformation("CheckPendingQuality complete: {Ready} notifications sent, {Waiting} still waiting, {Recent} recently asked, {AlreadyHave} already in library",
             readyToAsk, stillWaiting, recentlyAsked, alreadyHave);
+    }
+
+    private async Task SendImmediateQualityNotificationAsync(PendingDownload item, CancellationToken ct)
+    {
+        var waitHours = settings.CurrentValue.QualityWaitHours;
+        var elapsed = DateTime.UtcNow - (item.RssPublishDate ?? item.FirstSeen);
+
+        logger.LogInformation("📱 Sending immediate quality approval request for old episode: {Title} ({Quality}, published {Hours:F1}h ago)", 
+            item.RssTitle, item.Quality, elapsed.TotalHours);
+
+        try
+        {
+            item.AskedUser = true;
+            item.LastAsked = DateTime.UtcNow;
+
+            var callbackId = Guid.NewGuid().ToString("N")[..8];
+            var tcs = new TaskCompletionSource<string>();
+            telegram.PendingCallbacks[callbackId] = tcs;
+
+            logger.LogInformation("Created callback ID {CallbackId} for {Title}", callbackId, item.RssTitle);
+
+            var messageId = await telegram.SendInlineKeyboardAsync(
+                $"⚠️ {item.RssTitle}\nOnly {item.Quality} available (published {elapsed.TotalHours:F0}h ago). Download anyway?",
+                [
+                    [
+                        new InlineButton { Text = "✅ Yes", CallbackData = $"{callbackId}:yes" },
+                        new InlineButton { Text = "❌ No", CallbackData = $"{callbackId}:no" }
+                    ]
+                ], ct);
+
+            if (messageId.HasValue)
+            {
+                item.TelegramMessageId = messageId.Value;
+                logger.LogInformation("✅ Immediate quality approval notification sent successfully for: {Title} (MessageId: {MessageId})", item.RssTitle, messageId.Value);
+            }
+            else
+            {
+                logger.LogWarning("⚠️ Failed to send immediate quality notification for: {Title}", item.RssTitle);
+            }
+
+            db.PendingDownloads.Update(item);
+
+            // Start background task to wait for user response
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromHours(24));
+                    var result = await tcs.Task.WaitAsync(cts.Token);
+                    telegram.PendingCallbacks.TryRemove(callbackId, out _);
+
+                    logger.LogInformation("User response received for immediate notification {Title}: {Result}", item.RssTitle, result);
+
+                    if (result == "yes")
+                    {
+                        var added = await transmission.AddTorrentAsync(item.TorrentUrl, ct);
+                        if (added)
+                        {
+                            item.Status = PendingStatus.Downloaded;
+
+                            // Edit the original message to show it was accepted
+                            if (item.TelegramMessageId.HasValue)
+                            {
+                                logger.LogInformation("Editing immediate notification message {MessageId} to show acceptance for {Title}", item.TelegramMessageId.Value, item.RssTitle);
+                                await telegram.EditMessageAsync(
+                                    item.TelegramMessageId.Value,
+                                    $"✅ ACCEPTED\n\n{item.RssTitle}\nDownload started.",
+                                    ct);
+                            }
+                            else
+                            {
+                                logger.LogWarning("No message ID available to edit for immediate notification {Title}", item.RssTitle);
+                            }
+
+                            state.AddActivity($"Quality-approved download: {item.RssTitle}");
+                            db.DispatchedEpisodes.Insert(new DispatchedEpisode
+                            {
+                                ShowName = item.ShowName,
+                                Season = item.Season,
+                                Episode = item.Episode,
+                                DispatchedDate = DateTime.UtcNow
+                            });
+                        }
+                    }
+                    else
+                    {
+                        item.Status = PendingStatus.Rejected;
+
+                        // Edit the original message to show it was rejected
+                        if (item.TelegramMessageId.HasValue)
+                        {
+                            logger.LogInformation("Editing immediate notification message {MessageId} to show rejection for {Title}", item.TelegramMessageId.Value, item.RssTitle);
+                            await telegram.EditMessageAsync(
+                                item.TelegramMessageId.Value,
+                                $"❌ REJECTED\n\n{item.RssTitle}\nDownload cancelled.",
+                                ct);
+                        }
+                        else
+                        {
+                            logger.LogWarning("No message ID available to edit for immediate notification {Title}", item.RssTitle);
+                        }
+                    }
+                    db.PendingDownloads.Update(item);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error handling immediate notification response for {Title}", item.RssTitle);
+                    telegram.PendingCallbacks.TryRemove(callbackId, out _);
+                }
+            }, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "❌ Exception while sending immediate notification for: {Title}", item.RssTitle);
+        }
     }
 
     private void MarkProcessed(string guid, string title)

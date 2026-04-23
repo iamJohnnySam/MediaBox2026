@@ -11,33 +11,90 @@ public class TransmissionMonitorService(
     IOptionsMonitor<MediaBoxSettings> settings,
     ILogger<TransmissionMonitorService> logger) : BackgroundService
 {
+    private int _consecutiveFailures = 0;
+    private const int MaxConsecutiveFailures = 5;
+
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        logger.LogInformation("Transmission monitor waiting for Telegram readiness...");
-        await state.WaitForTelegramReadyAsync(ct);
+        logger.LogInformation("💾 Transmission monitor waiting for Telegram readiness...");
+
+        try
+        {
+            await state.WaitForTelegramReadyAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            logger.LogInformation("Transmission monitor cancelled during Telegram wait");
+            return;
+        }
+
         await Task.Delay(TimeSpan.FromSeconds(20), ct);
-        logger.LogInformation("Transmission monitor started");
+        logger.LogInformation("🚀 Transmission monitor started");
+        logger.LogInformation("Check interval: {Minutes} minutes", settings.CurrentValue.TransmissionCheckMinutes);
 
         while (!ct.IsCancellationRequested)
         {
             try
             {
+                logger.LogInformation("=== Transmission Monitor Cycle Starting ===");
+                if (_consecutiveFailures > 0)
+                {
+                    logger.LogWarning("⚠️ Consecutive failures: {Count}/{Max}", _consecutiveFailures, MaxConsecutiveFailures);
+                }
+
+                var checkStart = DateTime.UtcNow;
                 await MonitorAsync(ct);
+                _consecutiveFailures = 0; // Reset on success
+
+                var duration = DateTime.UtcNow - checkStart;
+                logger.LogInformation("✅ Transmission monitor cycle completed in {Duration:F1}s", duration.TotalSeconds);
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                logger.LogInformation("🛑 Transmission monitor shutting down...");
+                break;
+            }
+            catch (HttpRequestException hex)
+            {
+                _consecutiveFailures++;
+                logger.LogError(hex, "❌ Transmission HTTP error (consecutive failures: {Count}/{Max})", _consecutiveFailures, MaxConsecutiveFailures);
+
+                if (_consecutiveFailures >= MaxConsecutiveFailures)
+                {
+                    logger.LogCritical("🚨 Transmission monitor reached max consecutive failures. Increasing retry delay.");
+                    await Task.Delay(TimeSpan.FromMinutes(settings.CurrentValue.TransmissionCheckMinutes * 2), ct);
+                    _consecutiveFailures = 0; // Reset after extended delay
+                    continue;
+                }
+            }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Transmission monitor error");
+                _consecutiveFailures++;
+                logger.LogError(ex, "❌ Transmission monitor error (consecutive failures: {Count}/{Max})", _consecutiveFailures, MaxConsecutiveFailures);
             }
 
-            await Task.Delay(TimeSpan.FromMinutes(settings.CurrentValue.TransmissionCheckMinutes), ct);
+            try
+            {
+                await Task.Delay(TimeSpan.FromMinutes(settings.CurrentValue.TransmissionCheckMinutes), ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                logger.LogInformation("🛑 Transmission monitor shutting down during delay...");
+                break;
+            }
         }
     }
 
     private async Task MonitorAsync(CancellationToken ct)
     {
         var torrents = await transmission.GetTorrentsAsync(ct);
-        state.ActiveDownloads = torrents.Count(t => !t.IsFinished);
+        var activeCount = torrents.Count(t => !t.IsFinished);
+        var completedCount = torrents.Count(t => t.IsFinished);
+
+        logger.LogDebug("Retrieved {Total} torrents: {Active} active, {Completed} completed", 
+            torrents.Count, activeCount, completedCount);
+
+        state.ActiveDownloads = activeCount;
         state.NotifyChange();
 
         // Check for new large torrents from RSS (>1GB)
@@ -58,7 +115,7 @@ public class TransmissionMonitorService(
                     var paused = await transmission.PauseTorrentAsync(torrent.Id, ct);
                     if (paused)
                     {
-                        logger.LogInformation("Paused large torrent from RSS: {Name} ({Size:N2} GB)", 
+                        logger.LogInformation("⏸️ Paused large torrent from RSS: {Name} ({Size:N2} GB)", 
                             torrent.Name, torrent.TotalSize / 1_073_741_824.0);
 
                         // Track this torrent in database
@@ -82,9 +139,14 @@ public class TransmissionMonitorService(
         await CheckPendingLargeTorrentsAsync(ct);
 
         var completed = torrents.Where(t => t.IsFinished).ToList();
+        if (completed.Count > 0)
+        {
+            logger.LogInformation("📦 Processing {Count} completed torrent(s)", completed.Count);
+        }
+
         foreach (var torrent in completed)
         {
-            logger.LogInformation("Removing completed torrent: {Name}", torrent.Name);
+            logger.LogInformation("🗑️ Removing completed torrent: {Name}", torrent.Name);
             await transmission.RemoveTorrentAsync(torrent.Id, deleteData: false, ct);
             state.AddActivity($"Torrent completed: {torrent.Name}");
 
@@ -104,6 +166,11 @@ public class TransmissionMonitorService(
         var pending = db.PendingLargeTorrents
             .Find(p => p.Status == LargeTorrentStatus.Paused && !p.AskedUser)
             .ToList();
+
+        if (pending.Count > 0)
+        {
+            logger.LogInformation("⚠️ Found {Count} pending large torrent(s) requiring approval", pending.Count);
+        }
 
         foreach (var item in pending)
         {

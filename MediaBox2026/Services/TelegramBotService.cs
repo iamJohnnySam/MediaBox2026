@@ -33,6 +33,7 @@ public interface ITelegramNotifier
     Task SendPhotoAsync(string photoUrl, string caption, List<List<InlineButton>>? buttons = null, CancellationToken ct = default);
     Task<int?> SendInlineKeyboardAsync(string text, List<List<InlineButton>> buttons, CancellationToken ct = default);
     Task<bool> MessageExistsAsync(int messageId, CancellationToken ct = default);
+    Task EditMessageAsync(int messageId, string newText, CancellationToken ct = default);
     ConcurrentDictionary<string, TaskCompletionSource<string>> PendingCallbacks { get; }
 }
 
@@ -83,9 +84,17 @@ public class TelegramBotService(
         if (buttons != null)
         {
             var keyboard = buttons.Select(row =>
-                row.Select(b => new { text = b.Text, callback_data = b.CallbackData }).ToArray()
+                row.Select(b => new Dictionary<string, object>
+                {
+                    ["text"] = b.Text,
+                    ["callback_data"] = b.CallbackData
+                }).ToArray()
             ).ToArray();
-            payload["reply_markup"] = new { inline_keyboard = keyboard };
+
+            payload["reply_markup"] = new Dictionary<string, object>
+            {
+                ["inline_keyboard"] = keyboard
+            };
         }
 
         await PostAsync("sendPhoto", JsonSerializer.Serialize(payload, JsonOpts), ct);
@@ -112,22 +121,62 @@ public class TelegramBotService(
             return null;
         }
 
-        logger.LogInformation("Preparing to send Telegram inline keyboard to chat {ChatId}: {Text}", chatId.Value, text.Substring(0, Math.Min(50, text.Length)));
+        logger.LogInformation("Preparing to send Telegram inline keyboard to chat {ChatId}. Full text: '{Text}'", chatId.Value, text);
 
         var keyboard = buttons.Select(row =>
-            row.Select(b => new { text = b.Text, callback_data = b.CallbackData }).ToArray()
+            row.Select(b => new Dictionary<string, object>
+            {
+                ["text"] = b.Text,
+                ["callback_data"] = b.CallbackData
+            }).ToArray()
         ).ToArray();
 
-        var payload = JsonSerializer.Serialize(new
+        var payload = new Dictionary<string, object>
         {
-            chat_id = chatId.Value,
-            text,
-            reply_markup = new { inline_keyboard = keyboard }
-        }, JsonOpts);
+            ["chat_id"] = chatId.Value,
+            ["text"] = text,
+            ["reply_markup"] = new Dictionary<string, object>
+            {
+                ["inline_keyboard"] = keyboard
+            }
+        };
 
-        logger.LogDebug("Telegram API payload: {Payload}", payload);
+        var json = JsonSerializer.Serialize(payload, JsonOpts);
+        logger.LogInformation("Telegram API payload: {Payload}", json);
 
-        return await PostAsync("sendMessage", payload, ct);
+        return await PostAsync("sendMessage", json, ct);
+    }
+
+    public async Task EditMessageAsync(int messageId, string newText, CancellationToken ct = default)
+    {
+        var chatId = authStore.GetChatId();
+        if (chatId == null)
+        {
+            logger.LogError("❌ Cannot edit Telegram message: Chat ID is null.");
+            return;
+        }
+
+        logger.LogInformation("📝 Editing Telegram message {MessageId} in chat {ChatId} to: '{Text}'", messageId, chatId.Value, newText.Substring(0, Math.Min(50, newText.Length)));
+
+        var payload = new Dictionary<string, object>
+        {
+            ["chat_id"] = chatId.Value,
+            ["message_id"] = messageId,
+            ["text"] = newText
+        };
+
+        var json = JsonSerializer.Serialize(payload, JsonOpts);
+        logger.LogInformation("Edit message payload: {Payload}", json);
+
+        var result = await PostAsync("editMessageText", json, ct);
+        if (result.HasValue)
+        {
+            logger.LogInformation("✅ Message {MessageId} edited successfully", messageId);
+        }
+        else
+        {
+            logger.LogWarning("⚠️ Failed to edit message {MessageId}", messageId);
+        }
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -529,7 +578,12 @@ public class TelegramBotService(
         var callbackId = cbq.GetProperty("id").GetString() ?? "";
         var data = cbq.TryGetProperty("data", out var d) ? d.GetString() ?? "" : "";
 
-        await PostAsync("answerCallbackQuery", JsonSerializer.Serialize(new { callback_query_id = callbackId }, JsonOpts), ct);
+        // Answer the callback query to remove the "loading" state in Telegram
+        var ackPayload = new Dictionary<string, object>
+        {
+            ["callback_query_id"] = callbackId
+        };
+        await PostAsync("answerCallbackQuery", JsonSerializer.Serialize(ackPayload, JsonOpts), ct);
 
         // Movie search callbacks
         if (data.StartsWith("ms:"))
