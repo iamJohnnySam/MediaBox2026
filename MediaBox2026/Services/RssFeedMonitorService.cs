@@ -347,9 +347,18 @@ public class RssFeedMonitorService(
             if (catalog.HasEpisode(item.ShowName, item.Season, item.Episode, null))
             {
                 alreadyHave++;
-                logger.LogInformation("✅ Episode already in library, removing from pending: {Title}", item.RssTitle);
+                logger.LogInformation("✅ Episode already in library, updating pending and editing message: {Title}", item.RssTitle);
                 item.Status = PendingStatus.Downloaded;
                 db.PendingDownloads.Update(item);
+
+                // Edit the Telegram message to show it was handled
+                if (item.TelegramMessageId.HasValue)
+                {
+                    await telegram.EditMessageAsync(
+                        item.TelegramMessageId.Value,
+                        $"✅ ALREADY DOWNLOADED\n\n{item.RssTitle}\nThis episode was downloaded automatically.",
+                        ct);
+                }
                 continue;
             }
 
@@ -358,9 +367,18 @@ public class RssFeedMonitorService(
                 d.ShowName == item.ShowName && d.Season == item.Season && d.Episode == item.Episode))
             {
                 alreadyHave++;
-                logger.LogInformation("✅ Episode already dispatched, removing from pending: {Title}", item.RssTitle);
+                logger.LogInformation("✅ Episode already dispatched, updating pending and editing message: {Title}", item.RssTitle);
                 item.Status = PendingStatus.Downloaded;
                 db.PendingDownloads.Update(item);
+
+                // Edit the Telegram message to show it was handled
+                if (item.TelegramMessageId.HasValue)
+                {
+                    await telegram.EditMessageAsync(
+                        item.TelegramMessageId.Value,
+                        $"✅ ALREADY DOWNLOADED\n\n{item.RssTitle}\nThis episode was downloaded automatically.",
+                        ct);
+                }
                 continue;
             }
 
@@ -411,6 +429,9 @@ public class RssFeedMonitorService(
                         [
                             new InlineButton { Text = "✅ Yes", CallbackData = $"{callbackId}:yes" },
                             new InlineButton { Text = "❌ No", CallbackData = $"{callbackId}:no" }
+                        ],
+                        [
+                            new InlineButton { Text = "⏰ Remind Me Later", CallbackData = $"{callbackId}:later" }
                         ]
                     ], ct);
 
@@ -469,7 +490,7 @@ public class RssFeedMonitorService(
                                 });
                             }
                         }
-                        else
+                        else if (result == "no")
                         {
                             item.Status = PendingStatus.Rejected;
 
@@ -485,6 +506,22 @@ public class RssFeedMonitorService(
                             else
                             {
                                 logger.LogWarning("No message ID available to edit for {Title}", item.RssTitle);
+                            }
+                        }
+                        else if (result == "later")
+                        {
+                            // User wants to be reminded later - reset LastAsked to 2 hours ago
+                            // so the next check cycle (in 30 min) will re-ask after 2 hours total
+                            item.LastAsked = DateTime.UtcNow.AddHours(-22);
+                            logger.LogInformation("User chose 'Remind Me Later' for {Title}, will re-ask in ~2 hours", item.RssTitle);
+
+                            // Edit the message to show it's postponed
+                            if (item.TelegramMessageId.HasValue)
+                            {
+                                await telegram.EditMessageAsync(
+                                    item.TelegramMessageId.Value,
+                                    $"⏰ POSTPONED\n\n{item.RssTitle}\nYou'll be reminded in ~2 hours.",
+                                    ct);
                             }
                         }
                         db.PendingDownloads.Update(item);
@@ -531,6 +568,9 @@ public class RssFeedMonitorService(
                     [
                         new InlineButton { Text = "✅ Yes", CallbackData = $"{callbackId}:yes" },
                         new InlineButton { Text = "❌ No", CallbackData = $"{callbackId}:no" }
+                    ],
+                    [
+                        new InlineButton { Text = "⏰ Remind Me Later", CallbackData = $"{callbackId}:later" }
                     ]
                 ], ct);
 
@@ -588,7 +628,7 @@ public class RssFeedMonitorService(
                             });
                         }
                     }
-                    else
+                    else if (result == "no")
                     {
                         item.Status = PendingStatus.Rejected;
 
@@ -604,6 +644,21 @@ public class RssFeedMonitorService(
                         else
                         {
                             logger.LogWarning("No message ID available to edit for immediate notification {Title}", item.RssTitle);
+                        }
+                    }
+                    else if (result == "later")
+                    {
+                        // User wants to be reminded later - reset LastAsked to 2 hours ago
+                        item.LastAsked = DateTime.UtcNow.AddHours(-22);
+                        logger.LogInformation("User chose 'Remind Me Later' for immediate notification {Title}, will re-ask in ~2 hours", item.RssTitle);
+
+                        // Edit the message to show it's postponed
+                        if (item.TelegramMessageId.HasValue)
+                        {
+                            await telegram.EditMessageAsync(
+                                item.TelegramMessageId.Value,
+                                $"⏰ POSTPONED\n\n{item.RssTitle}\nYou'll be reminded in ~2 hours.",
+                                ct);
                         }
                     }
                     db.PendingDownloads.Update(item);

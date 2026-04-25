@@ -100,13 +100,16 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<TelegramBotService
 builder.Services.AddSingleton<RssFeedMonitorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RssFeedMonitorService>());
 
+// YouTube Download Service (singleton + hosted service for manual triggering)
+builder.Services.AddSingleton<YouTubeDownloadService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<YouTubeDownloadService>());
+
 // Other background services
 builder.Services.AddHostedService<MediaScannerService>();
 builder.Services.AddHostedService<NewsRssFeedService>();
 builder.Services.AddHostedService<TransmissionMonitorService>();
 builder.Services.AddHostedService<DownloadOrganizerService>();
 builder.Services.AddHostedService<MovieWatchlistService>();
-builder.Services.AddHostedService<YouTubeDownloadService>();
 
 // Crash reporter (subscribes to error logs, sends Telegram + saves crash data)
 builder.Services.AddSingleton<CrashReporter>();

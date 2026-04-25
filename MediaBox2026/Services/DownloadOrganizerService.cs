@@ -300,7 +300,7 @@ public class DownloadOrganizerService(
         var msg = $"📺 Organized: {Path.GetFileName(filePath)} → {Path.GetFileName(baseDir)}/Season {parsed.Season.Value:D2}/";
         logger.LogInformation(msg);
         state.AddActivity(msg);
-        await telegram.SendMessageAsync(msg, ct);
+        await telegram.SendSubscribersMessageAsync(msg, ct);
     }
 
     private async Task MoveMovieFileAsync(string filePath, ParsedMediaInfo parsed, MediaBoxSettings config, CancellationToken ct)
@@ -356,7 +356,7 @@ public class DownloadOrganizerService(
         var msg = $"🎬 Organized: {Path.GetFileName(filePath)} → {Path.GetFileName(destDir)}/";
         logger.LogInformation(msg);
         state.AddActivity(msg);
-        await telegram.SendMessageAsync(msg, ct);
+        await telegram.SendSubscribersMessageAsync(msg, ct);
     }
 
     private void MoveToUnknown(string filePath, MediaBoxSettings config)

@@ -30,6 +30,8 @@ public class TelegramMessage
 public interface ITelegramNotifier
 {
     Task SendMessageAsync(string text, CancellationToken ct = default);
+    Task SendAdminMessageAsync(string text, CancellationToken ct = default);
+    Task SendSubscribersMessageAsync(string text, CancellationToken ct = default);
     Task SendPhotoAsync(string photoUrl, string caption, List<List<InlineButton>>? buttons = null, CancellationToken ct = default);
     Task<int?> SendInlineKeyboardAsync(string text, List<List<InlineButton>> buttons, CancellationToken ct = default);
     Task<bool> MessageExistsAsync(int messageId, CancellationToken ct = default);
@@ -71,7 +73,7 @@ public class TelegramBotService(
 
     public async Task SendPhotoAsync(string photoUrl, string caption, List<List<InlineButton>>? buttons = null, CancellationToken ct = default)
     {
-        var chatId = authStore.GetChatId();
+        var chatId = authStore.GetAdminChatId();
         if (chatId == null) return;
 
         var payload = new Dictionary<string, object>
@@ -102,22 +104,50 @@ public class TelegramBotService(
 
     public async Task SendMessageAsync(string text, CancellationToken ct = default)
     {
-        var chatId = authStore.GetChatId();
-        if (chatId == null)
+        // Send to admin only (legacy behavior for backward compatibility)
+        await SendAdminMessageAsync(text, ct);
+    }
+
+    public async Task SendAdminMessageAsync(string text, CancellationToken ct = default)
+    {
+        var adminChatId = authStore.GetAdminChatId();
+        if (adminChatId == null)
         {
-            logger.LogWarning("No authenticated Telegram chat. Message not sent: {Text}", text);
+            logger.LogWarning("No authenticated Telegram admin. Admin message not sent: {Text}", text);
             return;
         }
-        await SendToChatAsync(chatId.Value, text, ct, parseMode: "Markdown");
+        await SendToChatAsync(adminChatId.Value, text, ct, parseMode: "Markdown");
+    }
+
+    public async Task SendSubscribersMessageAsync(string text, CancellationToken ct = default)
+    {
+        var subscribers = authStore.GetActiveSubscribers();
+        if (subscribers.Count == 0)
+        {
+            logger.LogWarning("No active subscribers. Subscriber message not sent: {Text}", text);
+            return;
+        }
+
+        foreach (var subscriber in subscribers)
+        {
+            try
+            {
+                await SendToChatAsync(subscriber.ChatId, text, ct, parseMode: "Markdown");
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to send message to subscriber {ChatId}", subscriber.ChatId);
+            }
+        }
     }
 
 
     public async Task<int?> SendInlineKeyboardAsync(string text, List<List<InlineButton>> buttons, CancellationToken ct = default)
     {
-        var chatId = authStore.GetChatId();
+        var chatId = authStore.GetAdminChatId();
         if (chatId == null)
         {
-            logger.LogError("❌ Cannot send Telegram notification: Chat ID is null. Make sure TelegramChatId is configured in settings.");
+            logger.LogError("❌ Cannot send Telegram notification: Admin chat ID is null. Make sure admin is authenticated or TelegramChatId is configured in settings.");
             return null;
         }
 
@@ -149,10 +179,10 @@ public class TelegramBotService(
 
     public async Task EditMessageAsync(int messageId, string newText, CancellationToken ct = default)
     {
-        var chatId = authStore.GetChatId();
+        var chatId = authStore.GetAdminChatId();
         if (chatId == null)
         {
-            logger.LogError("❌ Cannot edit Telegram message: Chat ID is null.");
+            logger.LogError("❌ Cannot edit Telegram message: Admin chat ID is null.");
             return;
         }
 
@@ -194,23 +224,23 @@ public class TelegramBotService(
 
         await Task.Delay(2000, ct);
 
-        // Signal readiness immediately if a chat is already authenticated
-        if (authStore.GetChatId() != null)
+        // Signal readiness immediately if admin is already authenticated
+        if (authStore.GetAdminChatId() != null)
         {
-            logger.LogInformation("Telegram chat already authenticated. Signaling ready.");
+            logger.LogInformation("Telegram admin already authenticated. Signaling ready.");
             state.SignalTelegramReady();
         }
         else
         {
-            // Wait up to 3 minutes for someone to authenticate, then signal ready anyway
-            logger.LogInformation("Waiting up to 3 minutes for Telegram authentication...");
+            // Wait up to 3 minutes for admin to authenticate, then signal ready anyway
+            logger.LogInformation("Waiting up to 3 minutes for Telegram admin authentication...");
             _ = Task.Run(async () =>
             {
                 try
                 {
                     await Task.Delay(TimeSpan.FromMinutes(3), ct);
                     state.SignalTelegramReady();
-                    logger.LogWarning("Telegram auth timeout. Continuing without authenticated chat.");
+                    logger.LogWarning("Telegram admin auth timeout. Continuing without authenticated admin.");
                 }
                 catch (OperationCanceledException) { state.SignalTelegramReady(); }
             }, ct);
@@ -262,26 +292,99 @@ public class TelegramBotService(
         var chatId = chat.GetProperty("id").GetInt64();
         var text = msg.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
 
-        var authenticatedChat = authStore.GetChatId();
+        // Extract user info
+        var username = msg.TryGetProperty("from", out var from) && from.TryGetProperty("username", out var un) 
+            ? un.GetString() : null;
+        var firstName = msg.TryGetProperty("from", out var from2) && from2.TryGetProperty("first_name", out var fn)
+            ? fn.GetString() : null;
+        var lastName = msg.TryGetProperty("from", out var from3) && from3.TryGetProperty("last_name", out var ln)
+            ? ln.GetString() : null;
 
-        if (authenticatedChat != chatId)
+        // Check if user is blocked
+        if (authStore.IsBlocked(chatId))
         {
-            if (text == settings.CurrentValue.AuthPassword)
-            {
-                authStore.SetChatId(chatId);
-                state.SignalTelegramReady();
-                await SendToChatAsync(chatId, "✅ Authenticated! You will now receive MediaBox notifications.", ct);
-                state.AddActivity("New Telegram chat authenticated");
-                logger.LogInformation("Telegram chat {ChatId} authenticated", chatId);
-            }
-            else
-            {
-                await SendToChatAsync(chatId, "🔒 Please enter your MediaBox password to authenticate.", ct);
-            }
+            logger.LogWarning("Blocked user attempted to interact: {ChatId} (@{Username})", chatId, username);
+            return; // Silently ignore blocked users
+        }
+
+        // Check if this is admin
+        if (authStore.IsAdmin(chatId))
+        {
+            await HandleCommandAsync(chatId, text, ct);
             return;
         }
 
-        await HandleCommandAsync(chatId, text, ct);
+        // Check if this is a subscriber
+        if (authStore.IsSubscriber(chatId))
+        {
+            await HandleSubscriberCommandAsync(chatId, text, ct);
+            return;
+        }
+
+        // Handle authentication
+        if (text.StartsWith("/subscribe", StringComparison.OrdinalIgnoreCase))
+        {
+            authStore.AddSubscriber(chatId, username, firstName, lastName);
+            await SendToChatAsync(chatId, 
+                "✅ Subscribed to MediaBox notifications!\n\n" +
+                "You will receive notifications when:\n" +
+                "• New media is downloaded\n" +
+                "• Media is added to the library\n\n" +
+                "Use /unsubscribe to stop receiving notifications.\n" +
+                "Use /help to see available commands.", ct);
+            state.AddActivity($"New subscriber: @{username ?? chatId.ToString()}");
+            logger.LogInformation("New subscriber: {ChatId} (@{Username})", chatId, username);
+            return;
+        }
+
+        if (text == settings.CurrentValue.AuthPassword)
+        {
+            // Check if admin already exists
+            if (authStore.HasAdmin())
+            {
+                var adminChatId = authStore.GetAdminChatId();
+                logger.LogWarning("Attempted admin registration while admin exists: {ChatId} (@{Username})", chatId, username);
+
+                // Notify the existing admin
+                if (adminChatId.HasValue)
+                {
+                    await SendToChatAsync(adminChatId.Value,
+                        $"⚠️ *Security Alert*\n\n" +
+                        $"Someone attempted to register as admin:\n" +
+                        $"Chat ID: `{chatId}`\n" +
+                        $"Username: @{username ?? "unknown"}\n" +
+                        $"Name: {firstName} {lastName}\n\n" +
+                        $"Use /block {chatId} to block this user.",
+                        ct, parseMode: "Markdown");
+                }
+
+                await SendToChatAsync(chatId, 
+                    "❌ Admin is already registered for this MediaBox instance.\n" +
+                    "If you believe this is an error, please contact the system administrator.", ct);
+                return;
+            }
+
+            // Register as admin
+            authStore.SetAdmin(chatId, username, firstName, lastName);
+            state.SignalTelegramReady();
+            await SendToChatAsync(chatId, 
+                "✅ *Admin Authentication Successful!*\n\n" +
+                "You now have full administrative access to MediaBox.\n" +
+                "You will receive all notifications including debug and error messages.\n\n" +
+                "Use /help to see available commands.", ct, parseMode: "Markdown");
+            state.AddActivity($"Admin authenticated: @{username ?? chatId.ToString()}");
+            logger.LogInformation("Admin authenticated: {ChatId} (@{Username})", chatId, username);
+            return;
+        }
+
+        // Not authenticated
+        await SendToChatAsync(chatId, 
+            "🤖 *Welcome to MediaBox!*\n\n" +
+            "To get started, choose an option:\n\n" +
+            "📱 */subscribe* - Receive general notifications\n" +
+            "   (downloads, new media added)\n\n" +
+            "👑 *Admin Password* - Full admin access\n" +
+            "   (debug, errors, all controls)", ct, parseMode: "Markdown");
     }
 
     private async Task HandleCommandAsync(long chatId, string text, CancellationToken ct)
@@ -298,7 +401,7 @@ public class TelegramBotService(
 
             case "/help":
                 await SendToChatAsync(chatId,
-                    "📋 *Commands:*\n" +
+                    "📋 *Admin Commands:*\n" +
                     "/status - System status\n" +
                     "/downloads - Active downloads\n" +
                     "/watchlist - Movie watchlist\n" +
@@ -306,10 +409,16 @@ public class TelegramBotService(
                     "/add Movie Name - Quick add to watchlist\n" +
                     "/remove Movie Name - Remove from watchlist\n" +
                     "/scan - Trigger media scan\n" +
+                    "/youtube - Manually download all YouTube sources\n" +
                     "/feeds - List RSS subscriptions\n" +
                     "/subscribe <url> <name> - Subscribe to RSS feed\n" +
                     "/unsubscribe <name> - Unsubscribe from feed\n" +
-                    "/resetquality - Reset & rescan quality notifications\n" +
+                    "/checkfeeds - Test RSS news feeds\n" +
+                    "/resetquality - Reset & rescan quality notifications\n\n" +
+                    "👥 *User Management:*\n" +
+                    "/subscribers - List all subscribers\n" +
+                    "/kick <chatId> - Remove a subscriber\n" +
+                    "/block <chatId> - Block a user\n" +
                     "/help - Show this message",
                     ct, parseMode: "Markdown");
                 break;
@@ -567,8 +676,299 @@ public class TelegramBotService(
                 }
                 break;
 
+            case "/checknews":
+                await SendToChatAsync(chatId, "📰 Checking RSS news feeds now...", ct);
+                try
+                {
+                    var subscriptions = db.RssFeedSubscriptions.Find(s => s.IsActive).ToList();
+                    if (subscriptions.Count == 0)
+                    {
+                        await SendToChatAsync(chatId, "No active news subscriptions. Use /subscribe to add feeds.", ct);
+                        break;
+                    }
+
+                    await SendToChatAsync(chatId, $"🔍 Checking {subscriptions.Count} feed(s)...", ct);
+
+                    // The NewsRssFeedService runs in background, so we need to trigger it manually
+                    // For now, let's just report when it will check next
+                    var now = DateTime.UtcNow;
+                    var nextCheck = TimeSpan.FromMinutes(settings.CurrentValue.RssFeedCheckMinutes);
+
+                    await SendToChatAsync(chatId, 
+                        $"📡 News feeds are checked every {settings.CurrentValue.RssFeedCheckMinutes} minutes.\n\n" +
+                        $"Use /checkfeeds to diagnose feed status.", ct);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error checking news feeds");
+                    await SendToChatAsync(chatId, $"❌ Error: {ex.Message}", ct);
+                }
+                break;
+
+            case "/diagnose":
+            case "/checkfeeds":
+                await SendToChatAsync(chatId, "🔍 Running RSS news feed diagnostics...", ct);
+                try
+                {
+                    var diagnosticOutput = new System.Text.StringBuilder();
+                    diagnosticOutput.AppendLine("📰 *RSS News Feed Diagnostics*\n");
+
+                    var subscriptions = db.RssFeedSubscriptions.FindAll().ToList();
+                    diagnosticOutput.AppendLine($"Total subscriptions: {subscriptions.Count}");
+                    diagnosticOutput.AppendLine($"Active: {subscriptions.Count(s => s.IsActive)}");
+
+                    if (subscriptions.Count == 0)
+                    {
+                        diagnosticOutput.AppendLine("\n❌ No subscriptions found!");
+                        diagnosticOutput.AppendLine("Use: /subscribe <url> <name>");
+                    }
+                    else
+                    {
+                        foreach (var sub in subscriptions)
+                        {
+                            diagnosticOutput.AppendLine($"\n• *{sub.FeedName}*");
+                            diagnosticOutput.AppendLine($"  Active: {(sub.IsActive ? "✅" : "❌")}");
+                            diagnosticOutput.AppendLine($"  Last checked: {sub.LastChecked?.ToString("g") ?? "Never"}");
+
+                            var processedCount = db.ProcessedFeedItems.Count(p => p.SubscriptionId == sub.Id);
+                            diagnosticOutput.AppendLine($"  Processed items: {processedCount}");
+
+                            if (sub.IsActive)
+                            {
+                                try
+                                {
+                                    using var httpClient = new HttpClient();
+                                    httpClient.Timeout = TimeSpan.FromSeconds(15);
+                                    httpClient.DefaultRequestHeaders.Add("User-Agent", "MediaBox2026/1.0");
+
+                                    var xmlContent = await httpClient.GetStringAsync(sub.FeedUrl, ct);
+                                    var doc = System.Xml.Linq.XDocument.Parse(xmlContent);
+                                    var ns = doc.Root?.GetDefaultNamespace() ?? System.Xml.Linq.XNamespace.None;
+                                    var feedItems = doc.Descendants(ns + "item").ToList();
+                                    if (feedItems.Count == 0)
+                                        feedItems = doc.Descendants("item").ToList();
+
+                                    diagnosticOutput.AppendLine($"  Feed test: ✅ {feedItems.Count} items");
+
+                                    if (feedItems.Count > 0)
+                                    {
+                                        var firstItem = feedItems.First();
+                                        var title = firstItem.Element(ns + "title")?.Value ?? firstItem.Element("title")?.Value ?? "";
+                                        var guid = firstItem.Element(ns + "guid")?.Value ?? firstItem.Element("guid")?.Value ?? title;
+
+                                        var alreadyProcessed = db.ProcessedFeedItems.Exists(p => 
+                                            p.SubscriptionId == sub.Id && p.ItemGuid == guid);
+
+                                        diagnosticOutput.AppendLine($"  Latest: {(title.Length > 40 ? title[..40] + "..." : title)}");
+                                        diagnosticOutput.AppendLine($"  Status: {(alreadyProcessed ? "Already sent ✅" : "New (will be sent) 🆕")}");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    diagnosticOutput.AppendLine($"  Feed test: ❌ {ex.Message}");
+                                }
+                            }
+                        }
+                    }
+
+                    await SendToChatAsync(chatId, diagnosticOutput.ToString(), ct, parseMode: "Markdown");
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error running diagnostics");
+                    await SendToChatAsync(chatId, $"❌ Diagnostic error: {ex.Message}", ct);
+                }
+                break;
+
+            case "/youtube":
+            case "/downloadyt":
+                await SendToChatAsync(chatId, "🎬 Starting manual YouTube downloads...", ct);
+                try
+                {
+                    var youtubeService = serviceProvider.GetService<YouTubeDownloadService>();
+                    if (youtubeService == null)
+                    {
+                        await SendToChatAsync(chatId, "❌ YouTube download service not available.", ct);
+                        break;
+                    }
+
+                    var sources = settings.CurrentValue.NewsSources;
+                    if (sources.Count == 0)
+                    {
+                        await SendToChatAsync(chatId, "❌ No YouTube sources configured in settings.", ct);
+                        break;
+                    }
+
+                    await SendToChatAsync(chatId, $"📋 Queued {sources.Count} download(s):\n" + 
+                        string.Join("\n", sources.Select((s, i) => $"{i + 1}. {s.MatchTitle}")), ct);
+
+                    var successCount = await youtubeService.TriggerManualDownloadAsync(ct);
+
+                    if (successCount == -1)
+                    {
+                        await SendToChatAsync(chatId, "⚠️ A YouTube download is already in progress. Please wait for it to complete.", ct);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error triggering manual YouTube download");
+                    await SendToChatAsync(chatId, $"❌ Error: {ex.Message}", ct);
+                }
+                break;
+
+            case "/subscribers":
+            case "/users":
+                try
+                {
+                    var subscribers = authStore.GetAllSubscribers();
+                    if (subscribers.Count == 0)
+                    {
+                        await SendToChatAsync(chatId, "📭 No subscribers registered.", ct);
+                        break;
+                    }
+
+                    var sb = new StringBuilder("👥 *Registered Subscribers:*\n\n");
+                    foreach (var sub in subscribers)
+                    {
+                        var statusEmoji = sub.IsBlocked ? "🚫" : (sub.IsActive ? "✅" : "❌");
+                        var status = sub.IsBlocked ? "Blocked" : (sub.IsActive ? "Active" : "Inactive");
+                        var name = !string.IsNullOrEmpty(sub.FirstName) ? $"{sub.FirstName} {sub.LastName}".Trim() : "Unknown";
+
+                        sb.AppendLine($"{statusEmoji} *{name}*");
+                        sb.AppendLine($"   Username: @{sub.Username ?? "none"}");
+                        sb.AppendLine($"   Chat ID: `{sub.ChatId}`");
+                        sb.AppendLine($"   Status: {status}");
+                        sb.AppendLine($"   Subscribed: {sub.SubscribedDate:g}");
+                        sb.AppendLine();
+                    }
+
+                    sb.AppendLine($"Total: {subscribers.Count} user(s)");
+                    sb.AppendLine($"Active: {subscribers.Count(s => s.IsActive && !s.IsBlocked)}");
+
+                    await SendToChatAsync(chatId, sb.ToString(), ct, parseMode: "Markdown");
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error listing subscribers");
+                    await SendToChatAsync(chatId, $"❌ Error: {ex.Message}", ct);
+                }
+                break;
+
+            case "/kick":
+                if (string.IsNullOrWhiteSpace(arg))
+                {
+                    await SendToChatAsync(chatId, "Usage: /kick <chatId>\n\nUse /subscribers to see chat IDs.", ct);
+                    break;
+                }
+
+                if (!long.TryParse(arg, out var kickChatId))
+                {
+                    await SendToChatAsync(chatId, "❌ Invalid chat ID. Must be a number.", ct);
+                    break;
+                }
+
+                try
+                {
+                    authStore.RemoveSubscriber(kickChatId);
+                    await SendToChatAsync(chatId, $"✅ Subscriber {kickChatId} has been removed.", ct);
+
+                    // Notify the kicked user
+                    try
+                    {
+                        await SendToChatAsync(kickChatId, 
+                            "⚠️ You have been removed from MediaBox notifications by the administrator.\n\n" +
+                            "To resubscribe, send /subscribe", ct);
+                    }
+                    catch { /* User might have blocked the bot */ }
+
+                    state.AddActivity($"Subscriber removed: {kickChatId}");
+                    logger.LogInformation("Admin {AdminChatId} kicked subscriber {KickedChatId}", chatId, kickChatId);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error kicking subscriber");
+                    await SendToChatAsync(chatId, $"❌ Error: {ex.Message}", ct);
+                }
+                break;
+
+            case "/block":
+                if (string.IsNullOrWhiteSpace(arg))
+                {
+                    await SendToChatAsync(chatId, "Usage: /block <chatId>\n\nUse /subscribers to see chat IDs.", ct);
+                    break;
+                }
+
+                if (!long.TryParse(arg, out var blockChatId))
+                {
+                    await SendToChatAsync(chatId, "❌ Invalid chat ID. Must be a number.", ct);
+                    break;
+                }
+
+                try
+                {
+                    authStore.BlockSubscriber(blockChatId);
+                    await SendToChatAsync(chatId, $"🚫 User {blockChatId} has been blocked.\n\nThey will not be able to subscribe or interact with the bot.", ct);
+
+                    state.AddActivity($"User blocked: {blockChatId}");
+                    logger.LogInformation("Admin {AdminChatId} blocked user {BlockedChatId}", chatId, blockChatId);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error blocking user");
+                    await SendToChatAsync(chatId, $"❌ Error: {ex.Message}", ct);
+                }
+                break;
+
             default:
                 await SendToChatAsync(chatId, "Unknown command. Use /help for available commands.", ct);
+                break;
+        }
+    }
+
+    private async Task HandleSubscriberCommandAsync(long chatId, string text, CancellationToken ct)
+    {
+        var parts = text.Split(' ', 2);
+        var command = parts[0].ToLowerInvariant();
+
+        switch (command)
+        {
+            case "/start":
+                await SendToChatAsync(chatId, "🎬 Welcome back! You are subscribed to MediaBox notifications.\n\nUse /help to see available commands.", ct);
+                break;
+
+            case "/help":
+                await SendToChatAsync(chatId,
+                    "📋 *Available Commands:*\n\n" +
+                    "/status - View system status\n" +
+                    "/unsubscribe - Stop receiving notifications\n" +
+                    "/help - Show this message", ct, parseMode: "Markdown");
+                break;
+
+            case "/status":
+                var statusMsg = $"📊 *MediaBox Status*\n" +
+                    $"📺 TV Shows: {state.TvShowCount}\n" +
+                    $"🎬 Movies: {state.MovieCount}\n" +
+                    $"📥 Active Downloads: {state.ActiveDownloads}\n" +
+                    $"📋 Watchlist: {state.WatchlistCount}\n" +
+                    $"📹 YouTube: {state.YouTubeCount}\n" +
+                    $"🔍 Last Scan: {state.LastMediaScan:g}\n" +
+                    $"📡 Last RSS: {state.LastRssCheck:g}";
+                await SendToChatAsync(chatId, statusMsg, ct, parseMode: "Markdown");
+                break;
+
+            case "/unsubscribe":
+                authStore.RemoveSubscriber(chatId);
+                await SendToChatAsync(chatId, 
+                    "✅ You have been unsubscribed from MediaBox notifications.\n\n" +
+                    "To subscribe again, send /subscribe", ct);
+                state.AddActivity($"Subscriber unsubscribed: {chatId}");
+                logger.LogInformation("Subscriber unsubscribed: {ChatId}", chatId);
+                break;
+
+            default:
+                await SendToChatAsync(chatId, 
+                    "Unknown command. Use /help to see available commands.\n\n" +
+                    "Note: You have limited access as a subscriber. For full access, contact the administrator.", ct);
                 break;
         }
     }
@@ -719,7 +1119,7 @@ public class TelegramBotService(
 
     public async Task<bool> MessageExistsAsync(int messageId, CancellationToken ct = default)
     {
-        var chatId = authStore.GetChatId();
+        var chatId = authStore.GetAdminChatId();
         if (chatId == null) return false;
 
         try

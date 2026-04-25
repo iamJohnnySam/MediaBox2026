@@ -262,3 +262,25 @@ public class ProcessedFeedItem : IEntity
     public string Title { get; set; } = "";
     public DateTime ProcessedDate { get; set; }
 }
+
+public class TelegramSubscriber : IEntity
+{
+    public int Id { get; set; }
+    public long ChatId { get; set; }
+    public string? Username { get; set; }
+    public string? FirstName { get; set; }
+    public string? LastName { get; set; }
+    public DateTime SubscribedDate { get; set; }
+    public bool IsActive { get; set; } = true;
+    public bool IsBlocked { get; set; } = false;
+}
+
+public class TelegramAdmin : IEntity
+{
+    public int Id { get; set; }
+    public long ChatId { get; set; }
+    public string? Username { get; set; }
+    public string? FirstName { get; set; }
+    public string? LastName { get; set; }
+    public DateTime AuthenticatedDate { get; set; }
+}

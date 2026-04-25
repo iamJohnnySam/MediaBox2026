@@ -51,6 +51,29 @@ Shows all your active RSS feed subscriptions with their names, URLs, and last ch
 
 The name matching is case-insensitive and partial matches work (e.g., `/unsubscribe ada` will match "Ada Derana News").
 
+### Check Feed Status (Diagnostic)
+
+```
+/checkfeeds
+```
+
+This command tests all your subscribed feeds and shows:
+- Total subscriptions (active/inactive)
+- Last check time for each feed
+- Number of processed items
+- Current feed status (tests if the feed URL is reachable)
+- Whether the latest item has been sent or is new
+
+**Use this command to troubleshoot if you're not receiving notifications!**
+
+### Manual News Check
+
+```
+/checknews
+```
+
+Shows the current check interval and reminds you to use `/checkfeeds` for diagnostics.
+
 ### Help Command
 
 ```
@@ -145,24 +168,80 @@ Here are some popular news RSS feeds you can subscribe to:
 
 ## Troubleshooting
 
+### Not receiving notifications? Follow these steps:
+
+**Step 1: Run diagnostics**
+```
+/checkfeeds
+```
+
+This command will:
+- Show all your subscriptions
+- Test each feed URL
+- Display the latest article and whether it's already been sent
+- Identify any connection issues
+
+**Step 2: Check your subscriptions**
+```
+/feeds
+```
+
+Verify that:
+- Your feed is listed
+- It shows as active (✅)
+- The last check time is recent
+
+**Step 3: Common issues and solutions**
+
+| Problem | Solution |
+|---------|----------|
+| No subscriptions shown | Use `/subscribe <url> <name>` to add feeds |
+| Feed marked inactive (❌) | Re-subscribe with the same URL and a new name |
+| "Already sent ✅" on all items | Wait for new articles to be published, or all items have been sent |
+| Feed test shows error | The feed URL might be invalid or the site is down |
+| Last checked shows "Never" | Service might not have started. Wait 30 seconds after app launch |
+| Last checked is old | Check application logs for errors in NewsRssFeedService |
+
+**Step 4: Check service logs**
+
+Look for these log entries:
+```
+📰 News RSS feed monitor started
+🚀 News RSS feed monitor started
+📡 Checking N active feed subscription(s)
+```
+
+If you see errors like:
+- `❌ News RSS feed HTTP error` - The feed URL is unreachable
+- `❌ Failed to parse XML` - The feed format is invalid
+- `❌ Failed to send Telegram notification` - Telegram API issue
+
+**Step 5: Verify configuration**
+
+Check `appsettings.json`:
+```json
+{
+  "MediaBox": {
+    "RssFeedCheckMinutes": 30
+  }
+}
+```
+
+The service checks feeds every `RssFeedCheckMinutes` (default: 30 minutes).
+
 ### Feed not working
 
 1. Verify the feed URL is valid by opening it in a browser
-2. Check logs for errors: Look for "NewsRssFeedService" entries
-3. Ensure the feed returns valid XML
-
-### Not receiving notifications
-
-1. Make sure you're authenticated with the Telegram bot
-2. Check that the feed is marked as active with `/feeds`
-3. Verify `RssFeedCheckMinutes` is set reasonably (5-30 minutes)
-4. Look for errors in the application logs
+2. Check that it returns valid XML/RSS content
+3. Use `/checkfeeds` to test the feed
+4. Try a different feed to see if the issue is service-wide or feed-specific
 
 ### Duplicate notifications
 
 This shouldn't happen as the system tracks processed items by GUID. If it does:
 1. Check if the feed is providing consistent GUIDs
 2. Review the `ProcessedFeedItems` table in the database
+3. Report it as a bug with the feed URL
 
 ## Future Enhancements
 

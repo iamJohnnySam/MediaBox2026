@@ -36,7 +36,7 @@ public class CrashReporter : IDisposable
                 var msg = $"🚨 {entry.Level}: [{ShortenCategory(entry.Category)}] {entry.Message}";
                 if (msg.Length > 400)
                     msg = msg[..397] + "...";
-                await _telegram.SendMessageAsync(msg);
+                await _telegram.SendAdminMessageAsync(msg);
             }
             catch { /* best-effort */ }
             finally { _isReporting = false; }
@@ -104,7 +104,7 @@ public class CrashReporter : IDisposable
         {
             var msg = $"💀 CRITICAL [{source}]: {ex.Message}";
             if (msg.Length > 400) msg = msg[..397] + "...";
-            _telegram.SendMessageAsync(msg).GetAwaiter().GetResult();
+            _telegram.SendAdminMessageAsync(msg).GetAwaiter().GetResult();
         }
         catch { /* best-effort */ }
     }

@@ -30,6 +30,8 @@ public class MediaDatabase : IDisposable
     public DbCollection<RssFeedSubscription> RssFeedSubscriptions { get; }
     public DbCollection<ProcessedFeedItem> ProcessedFeedItems { get; }
     public DbCollection<NotifiedDuplicate> NotifiedDuplicates { get; }
+    public DbCollection<TelegramSubscriber> TelegramSubscribers { get; }
+    public DbCollection<TelegramAdmin> TelegramAdmins { get; }
 
     public MediaDatabase(IOptions<MediaBoxSettings> settings, ILogger<MediaDatabase> logger)
     {
@@ -96,6 +98,8 @@ public class MediaDatabase : IDisposable
         RssFeedSubscriptions = new DbCollection<RssFeedSubscription>(_db, DbLock, "rss_feed_subscriptions", JsonOpts);
         ProcessedFeedItems = new DbCollection<ProcessedFeedItem>(_db, DbLock, "processed_feed_items", JsonOpts);
         NotifiedDuplicates = new DbCollection<NotifiedDuplicate>(_db, DbLock, "notified_duplicates", JsonOpts);
+        TelegramSubscribers = new DbCollection<TelegramSubscriber>(_db, DbLock, "telegram_subscribers", JsonOpts);
+        TelegramAdmins = new DbCollection<TelegramAdmin>(_db, DbLock, "telegram_admins", JsonOpts);
 
         _logger.LogInformation("📊 Database collections initialized:");
         _logger.LogInformation("  - TV Shows: {Count}", TvShows.Count());

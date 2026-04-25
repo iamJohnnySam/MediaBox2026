@@ -14,6 +14,7 @@ public class YouTubeDownloadService(
     private int _consecutiveFailures = 0;
     private const int MaxConsecutiveFailures = 5;
     private const int ProcessTimeoutMinutes = 30;
+    private readonly SemaphoreSlim _manualTriggerLock = new(1, 1);
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -112,6 +113,7 @@ public class YouTubeDownloadService(
         var args = string.Join(" ",
             "--js-runtimes node",
             "--ignore-errors",
+            "--no-cache-dir",
             $"--download-archive \"{config.YtDlpArchivePath}\"",
             "--no-overwrites",
             "--dateafter today-3days",
@@ -231,6 +233,62 @@ public class YouTubeDownloadService(
         {
             logger.LogError(ex, "❌ Failed to validate yt-dlp installation");
             return false;
+        }
+    }
+
+    public async Task<int> TriggerManualDownloadAsync(CancellationToken ct = default)
+    {
+        if (!await _manualTriggerLock.WaitAsync(0, ct))
+        {
+            logger.LogWarning("⚠️ Manual YouTube download already in progress");
+            return -1;
+        }
+
+        try
+        {
+            var sources = settings.CurrentValue.NewsSources;
+            if (sources.Count == 0)
+            {
+                logger.LogWarning("No news sources configured for manual download");
+                return 0;
+            }
+
+            logger.LogInformation("🎬 Manual YouTube download triggered for {Count} source(s)", sources.Count);
+            await telegram.SendMessageAsync($"🎬 Starting manual YouTube downloads for {sources.Count} source(s)...", ct);
+
+            int successCount = 0;
+            for (int i = 0; i < sources.Count; i++)
+            {
+                var source = sources[i];
+                logger.LogInformation("📥 [{Current}/{Total}] Downloading: {Title} from {Url}", i + 1, sources.Count, source.MatchTitle, source.Url);
+
+                try
+                {
+                    await DownloadNewsAsync(source, ct);
+                    successCount++;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "❌ Failed to download: {Title}", source.MatchTitle);
+                    await telegram.SendMessageAsync($"❌ Failed to download: {source.MatchTitle}", ct);
+                }
+
+                // Delay between downloads to avoid rate limiting (especially for same channel)
+                if (i < sources.Count - 1)
+                {
+                    logger.LogInformation("⏳ Waiting 15 seconds before next download...");
+                    await Task.Delay(TimeSpan.FromSeconds(15), ct);
+                }
+            }
+
+            logger.LogInformation("✅ Manual YouTube download complete: {Success}/{Total} successful", successCount, sources.Count);
+            await telegram.SendMessageAsync($"✅ Manual YouTube download complete: {successCount}/{sources.Count} successful", ct);
+
+            return successCount;
+        }
+        finally
+        {
+            _manualTriggerLock.Release();
         }
     }
 }
