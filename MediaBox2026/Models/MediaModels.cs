@@ -193,6 +193,7 @@ public class MediaBoxSettings
     public int WatchlistCheckHours { get; set; } = 6;
     public int QualityWaitHours { get; set; } = 4;
     public int MediaScanHours { get; set; } = 12;
+    public bool YouTubeDownloadPaused { get; set; } = false;
 }
 
 public class NewsSource
@@ -200,6 +201,7 @@ public class NewsSource
     public string Url { get; set; } = "";
     public string MatchTitle { get; set; } = "";
     public string DownloadTime { get; set; } = "19:45";
+    public bool Paused { get; set; } = false;
 }
 
 public class DispatchedEpisode : IEntity

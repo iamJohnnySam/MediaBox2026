@@ -188,6 +188,14 @@ public class DownloadOrganizerService(
 
     private async Task<bool> ProcessDirectoryAsync(string dirPath, MediaBoxSettings config, CancellationToken ct)
     {
+        var folderName = Path.GetFileName(dirPath);
+        logger.LogInformation("📁 Processing directory: {FolderName}", folderName);
+
+        // Parse the torrent folder name — it usually has the best title/year info
+        var folderParsed = FileNameParser.Parse(folderName);
+        logger.LogInformation("📂 Folder parse result: CleanName='{CleanName}', Year={Year}, IsTvShow={IsTvShow}, Quality='{Quality}'",
+            folderParsed.CleanName, folderParsed.Year, folderParsed.IsTvShow, folderParsed.Quality);
+
         var allFiles = Directory.GetFiles(dirPath, "*.*", SearchOption.AllDirectories);
         var hasMediaFiles = false;
 
@@ -196,7 +204,7 @@ public class DownloadOrganizerService(
             if (FileNameParser.IsMediaFile(file) || FileNameParser.IsSubtitleFile(file))
             {
                 hasMediaFiles = true;
-                await MoveMediaFileAsync(file, config, ct);
+                await MoveMediaFileAsync(file, config, ct, folderParsed);
             }
             else
             {
@@ -229,10 +237,53 @@ public class DownloadOrganizerService(
         return false;
     }
 
-    private async Task MoveMediaFileAsync(string filePath, MediaBoxSettings config, CancellationToken ct)
+    private async Task MoveMediaFileAsync(string filePath, MediaBoxSettings config, CancellationToken ct, ParsedMediaInfo? folderHint = null)
     {
         var fileName = Path.GetFileName(filePath);
-        var parsed = FileNameParser.Parse(fileName);
+        var fileParsed = FileNameParser.Parse(fileName);
+        logger.LogInformation("🎞️ File parse result: '{FileName}' → CleanName='{CleanName}', Year={Year}, IsTvShow={IsTvShow}, Quality='{Quality}'",
+            fileName, fileParsed.CleanName, fileParsed.Year, fileParsed.IsTvShow, fileParsed.Quality);
+
+        // Merge: prefer the folder hint's title/year when the file parse looks weak
+        var parsed = fileParsed;
+        if (folderHint != null)
+        {
+            // Use folder name when the file name doesn't carry a meaningful clean name
+            // (e.g., a generic name like "movie.mkv" or the folder name is richer)
+            bool fileNameIsWeak = string.IsNullOrWhiteSpace(fileParsed.CleanName)
+                || fileParsed.CleanName.Equals(Path.GetFileNameWithoutExtension(fileName), StringComparison.OrdinalIgnoreCase)
+                || fileParsed.CleanName.Length < folderHint.CleanName.Length;
+
+            if (fileNameIsWeak)
+            {
+                logger.LogInformation("📂 Using folder name hint for classification: '{FolderName}'", folderHint.CleanName);
+                parsed = new ParsedMediaInfo
+                {
+                    OriginalFileName = fileParsed.OriginalFileName,
+                    CleanName = folderHint.CleanName,
+                    Year = fileParsed.Year ?? folderHint.Year,
+                    Season = fileParsed.Season ?? folderHint.Season,
+                    Episode = fileParsed.Episode ?? folderHint.Episode,
+                    Quality = fileParsed.Quality ?? folderHint.Quality,
+                };
+            }
+            else if (!fileParsed.Year.HasValue && folderHint.Year.HasValue)
+            {
+                logger.LogInformation("📅 Borrowing year {Year} from folder hint for: '{FileName}'", folderHint.Year, fileName);
+                parsed = new ParsedMediaInfo
+                {
+                    OriginalFileName = fileParsed.OriginalFileName,
+                    CleanName = fileParsed.CleanName,
+                    Year = folderHint.Year,
+                    Season = fileParsed.Season,
+                    Episode = fileParsed.Episode,
+                    Quality = fileParsed.Quality ?? folderHint.Quality,
+                };
+            }
+        }
+
+        logger.LogInformation("✅ Final classification: CleanName='{CleanName}', Year={Year}, IsTvShow={IsTvShow}",
+            parsed.CleanName, parsed.Year, parsed.IsTvShow);
 
         if (parsed.IsTvShow)
         {

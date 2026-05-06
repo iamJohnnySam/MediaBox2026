@@ -70,16 +70,24 @@ public static partial class FileNameParser
             }
         }
 
+        // Torrent filenames follow the pattern: Title.Year.Quality.Codec.Source-Group
+        // Everything from the year onwards is technical metadata — truncate there.
         var yearMatch = YearRegex().Match(" " + baseName + " ");
         if (yearMatch.Success)
         {
             info.Year = int.Parse(yearMatch.Groups[1].Value);
+            // offset accounts for the leading space prepended before matching
             var offset = yearMatch.Index - 1;
             if (offset >= 0 && offset < baseName.Length)
-            {
-                var len = Math.Min(yearMatch.Length, baseName.Length - offset);
-                baseName = baseName[..offset] + baseName[(offset + len)..];
-            }
+                baseName = baseName[..offset];
+        }
+        else if (qualityMatch.Success)
+        {
+            // No year found — truncate at the first quality token (e.g. 720p, 1080p)
+            // so codec/source tags after it don't pollute the title.
+            var cutIndex = qualityMatch.Index;
+            if (cutIndex > 0)
+                baseName = baseName[..cutIndex];
         }
 
         info.CleanName = CleanName(baseName);

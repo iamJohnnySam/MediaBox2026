@@ -410,6 +410,8 @@ public class TelegramBotService(
                     "/remove Movie Name - Remove from watchlist\n" +
                     "/scan - Trigger media scan\n" +
                     "/youtube - Manually download all YouTube sources\n" +
+                    "/youtubepause [title] - Pause all or one YouTube source\n" +
+                    "/youtuberesume [title] - Resume all or one YouTube source\n" +
                     "/feeds - List RSS subscriptions\n" +
                     "/subscribe <url> <name> - Subscribe to RSS feed\n" +
                     "/unsubscribe <name> - Unsubscribe from feed\n" +
@@ -429,7 +431,9 @@ public class TelegramBotService(
                     $"🎬 Movies: {state.MovieCount}\n" +
                     $"📥 Active Downloads: {state.ActiveDownloads}\n" +
                     $"📋 Watchlist: {state.WatchlistCount}\n" +
-                    $"📹 YouTube: {state.YouTubeCount}\n" +
+                    $"📹 YouTube: {state.YouTubeCount}" +
+                    (state.YouTubeTemporarilyPaused ? " ⏸️ *paused*" :
+                     settings.CurrentValue.YouTubeDownloadPaused ? " ⏸️ *disabled in settings*" : "") + "\n" +
                     $"🔍 Last Scan: {state.LastMediaScan:g}\n" +
                     $"📡 Last RSS: {state.LastRssCheck:g}";
                 await SendToChatAsync(chatId, statusMsg, ct, parseMode: "Markdown");
@@ -800,19 +804,97 @@ public class TelegramBotService(
                     }
 
                     await SendToChatAsync(chatId, $"📋 Queued {sources.Count} download(s):\n" + 
-                        string.Join("\n", sources.Select((s, i) => $"{i + 1}. {s.MatchTitle}")), ct);
+                        string.Join("\n", sources.Select((s, i) =>
+                        {
+                            var paused = s.Paused || state.IsSourceTemporarilyPaused(s.MatchTitle);
+                            return $"{i + 1}. {s.MatchTitle}{(paused ? " ⏸️" : "")}";
+                        })), ct);
 
                     var successCount = await youtubeService.TriggerManualDownloadAsync(ct);
 
                     if (successCount == -1)
-                    {
                         await SendToChatAsync(chatId, "⚠️ A YouTube download is already in progress. Please wait for it to complete.", ct);
-                    }
+                    else if (successCount == -2)
+                        await SendToChatAsync(chatId, "⏸️ YouTube downloads are temporarily paused. Use /youtuberesume to unpause.", ct);
+                    else if (successCount == -3)
+                        await SendToChatAsync(chatId, "⏸️ YouTube downloads are disabled in settings (YouTubeDownloadPaused=true).", ct);
                 }
                 catch (Exception ex)
                 {
                     logger.LogError(ex, "Error triggering manual YouTube download");
                     await SendToChatAsync(chatId, $"❌ Error: {ex.Message}", ct);
+                }
+                break;
+
+            case "/youtubepause":
+            case "/ytpause":
+                if (string.IsNullOrWhiteSpace(arg))
+                {
+                    // Pause all
+                    state.YouTubeTemporarilyPaused = true;
+                    state.AddActivity("YouTube downloads temporarily paused via Telegram");
+                    logger.LogInformation("⏸️ YouTube downloads paused by admin chat {ChatId}", chatId);
+                    await SendToChatAsync(chatId,
+                        "⏸️ *All YouTube downloads paused* (until next restart or /youtuberesume).\n\n" +
+                        "To pause a single source: `/youtubepause <title>`\n" +
+                        "To pause permanently, set `YouTubeDownloadPaused: true` in settings.", ct, parseMode: "Markdown");
+                }
+                else
+                {
+                    // Pause specific source
+                    var matchedSource = settings.CurrentValue.NewsSources
+                        .FirstOrDefault(s => s.MatchTitle.Contains(arg, StringComparison.OrdinalIgnoreCase));
+                    if (matchedSource is null)
+                    {
+                        var sourceList = string.Join("\n", settings.CurrentValue.NewsSources.Select((s, i) => $"{i + 1}. {s.MatchTitle}"));
+                        await SendToChatAsync(chatId, $"❌ No source matching \"{arg}\" found.\n\nAvailable sources:\n{sourceList}", ct);
+                        break;
+                    }
+                    state.PauseSource(matchedSource.MatchTitle);
+                    state.AddActivity($"YouTube source paused: {matchedSource.MatchTitle}");
+                    logger.LogInformation("⏸️ YouTube source paused by admin {ChatId}: {Title}", chatId, matchedSource.MatchTitle);
+                    await SendToChatAsync(chatId,
+                        $"⏸️ *Paused:* {matchedSource.MatchTitle}\n\n" +
+                        "This is temporary and resets on restart.\n" +
+                        "To make it permanent, tick the Paused checkbox in Settings.", ct, parseMode: "Markdown");
+                }
+                break;
+
+            case "/youtuberesume":
+            case "/ytresume":
+                if (string.IsNullOrWhiteSpace(arg))
+                {
+                    // Resume all
+                    state.YouTubeTemporarilyPaused = false;
+                    foreach (var src in settings.CurrentValue.NewsSources)
+                        state.ResumeSource(src.MatchTitle);
+                    state.AddActivity("YouTube downloads resumed via Telegram");
+                    logger.LogInformation("▶️ YouTube downloads resumed by admin chat {ChatId}", chatId);
+                    var persistentlyPaused = settings.CurrentValue.YouTubeDownloadPaused;
+                    var resumeMsg = persistentlyPaused
+                        ? "⚠️ Temporary pauses lifted, but YouTube downloads are still *permanently disabled* in settings (`YouTubeDownloadPaused=true`). Change the setting to fully re-enable."
+                        : "▶️ *All YouTube downloads resumed.* The next scheduled download will proceed as normal.\n\nNote: sources with the persistent Paused flag in settings are still skipped.";
+                    await SendToChatAsync(chatId, resumeMsg, ct, parseMode: "Markdown");
+                }
+                else
+                {
+                    // Resume specific source
+                    var matchedSource = settings.CurrentValue.NewsSources
+                        .FirstOrDefault(s => s.MatchTitle.Contains(arg, StringComparison.OrdinalIgnoreCase));
+                    if (matchedSource is null)
+                    {
+                        var sourceList = string.Join("\n", settings.CurrentValue.NewsSources.Select((s, i) => $"{i + 1}. {s.MatchTitle}"));
+                        await SendToChatAsync(chatId, $"❌ No source matching \"{arg}\" found.\n\nAvailable sources:\n{sourceList}", ct);
+                        break;
+                    }
+                    state.ResumeSource(matchedSource.MatchTitle);
+                    state.AddActivity($"YouTube source resumed: {matchedSource.MatchTitle}");
+                    logger.LogInformation("▶️ YouTube source resumed by admin {ChatId}: {Title}", chatId, matchedSource.MatchTitle);
+                    var srcPersistentlyPaused = matchedSource.Paused;
+                    var srcResumeMsg = srcPersistentlyPaused
+                        ? $"⚠️ Temporary pause lifted for *{matchedSource.MatchTitle}*, but it is still *permanently paused* in settings. Uncheck it in Settings to fully re-enable."
+                        : $"▶️ *Resumed:* {matchedSource.MatchTitle}";
+                    await SendToChatAsync(chatId, srcResumeMsg, ct, parseMode: "Markdown");
                 }
                 break;
 

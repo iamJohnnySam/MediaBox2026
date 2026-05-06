@@ -102,6 +102,12 @@
                     <label class="form-label">RSS Feed URL</label>
                     <input type="text" class="form-control" @bind="rssFeedUrl" />
                 </div>
+                <div class="mb-3 form-check">
+                    <input type="checkbox" class="form-check-input" id="ytPaused" @bind="youtubeDownloadPaused" />
+                    <label class="form-check-label" for="ytPaused">
+                        ⏸️ Pause YouTube downloads (persistent across restarts)
+                    </label>
+                </div>
                 <hr />
                 <label class="form-label fw-bold">News Sources</label>
                 @for (var i = 0; i < newsSources.Count; i++)
@@ -117,13 +123,17 @@
                                 <label class="form-label small mb-0">Match Title</label>
                                 <input type="text" class="form-control form-control-sm" @bind="newsSources[idx].MatchTitle" />
                             </div>
-                            <div class="row">
+                            <div class="row align-items-end">
                                 <div class="col">
                                     <label class="form-label small mb-0">Download Time</label>
                                     <input type="text" class="form-control form-control-sm" @bind="newsSources[idx].DownloadTime" placeholder="19:45" />
                                 </div>
-                                <div class="col-auto d-flex align-items-end">
-                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => newsSources.RemoveAt(idx)">✕</button>
+                                <div class="col-auto d-flex align-items-end gap-2">
+                                    <div class="form-check mb-1">
+                                        <input type="checkbox" class="form-check-input" id="srcPaused_@idx" @bind="newsSources[idx].Paused" />
+                                        <label class="form-check-label small" for="srcPaused_@idx">⏸️ Paused</label>
+                                    </div>
+                                    <button class="btn btn-sm btn-outline-danger mb-1" @onclick="() => newsSources.RemoveAt(idx)">✕</button>
                                 </div>
                             </div>
                         </div>
@@ -175,6 +185,7 @@
     private string jellyfinUrl = "";
     private string jellyfinApiKey = "";
     private string rssFeedUrl = "";
+    private bool youtubeDownloadPaused;
     private List<NewsSource> newsSources = [];
     private int rssMinutes;
     private int transmissionMinutes;
@@ -196,6 +207,7 @@
         jellyfinUrl = section["JellyfinUrl"] ?? "";
         jellyfinApiKey = section["JellyfinApiKey"] ?? "";
         rssFeedUrl = section["RssFeedUrl"] ?? "";
+        youtubeDownloadPaused = bool.TryParse(section["YouTubeDownloadPaused"], out var ytp) && ytp;
         newsSources = Configuration.GetSection("MediaBox:NewsSources").Get<List<NewsSource>>() ?? [];
         rssMinutes = int.TryParse(section["RssFeedCheckMinutes"], out var r) ? r : 30;
         transmissionMinutes = int.TryParse(section["TransmissionCheckMinutes"], out var t) ? t : 5;
@@ -241,6 +253,7 @@
                         writer.WriteString("Url", src.Url);
                         writer.WriteString("MatchTitle", src.MatchTitle);
                         writer.WriteString("DownloadTime", src.DownloadTime);
+                        writer.WriteBoolean("Paused", src.Paused);
                         writer.WriteEndObject();
                     }
                     writer.WriteEndArray();
@@ -251,6 +264,7 @@
                     writer.WriteNumber("DownloadOrganizerMinutes", 10);
                     writer.WriteNumber("WatchlistCheckHours", 6);
                     writer.WriteNumber("MediaScanHours", 12);
+                    writer.WriteBoolean("YouTubeDownloadPaused", youtubeDownloadPaused);
                     writer.WriteEndObject();
                 }
                 else
