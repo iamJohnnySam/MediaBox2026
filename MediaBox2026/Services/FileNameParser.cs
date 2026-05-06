@@ -85,9 +85,10 @@ public static partial class FileNameParser
         {
             // No year found — truncate at the first quality token (e.g. 720p, 1080p)
             // so codec/source tags after it don't pollute the title.
-            var cutIndex = qualityMatch.Index;
-            if (cutIndex > 0)
-                baseName = baseName[..cutIndex];
+            // Re-match against the current baseName since it may have been shortened by season/episode stripping.
+            var currentQualityMatch = QualityRegex().Match(baseName);
+            if (currentQualityMatch.Success && currentQualityMatch.Index > 0)
+                baseName = baseName[..currentQualityMatch.Index];
         }
 
         info.CleanName = CleanName(baseName);

@@ -181,11 +181,7 @@ public class MediaBoxSettings
 
     public string YtDlpArchivePath { get; set; } = "/home/atom/.config/ytdl-archive.txt";
 
-    public List<NewsSource> NewsSources { get; set; } =
-    [
-        new() { Url = "https://www.youtube.com/@NewsFirstSrilanka/streams", MatchTitle = "Prime Time Sinhala News - 7 PM", DownloadTime = "19:45" },
-        new() { Url = "https://www.youtube.com/@NewsFirstSrilanka/stream", MatchTitle = "Prime Time English News - 9 PM", DownloadTime = "21:45" }
-    ];
+    public List<NewsSource> NewsSources { get; set; } = [];
 
     public int RssFeedCheckMinutes { get; set; } = 30;
     public int TransmissionCheckMinutes { get; set; } = 5;
