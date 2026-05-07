@@ -179,6 +179,12 @@ public class MediaBoxSettings
 
     public string RssFeedUrl { get; set; } = "https://episodefeed.com/rss/129/477500a959d617288def89205dd3d6bacf97380e";
 
+    /// <summary>
+    /// Additional RSS feeds scanned periodically when a pending item is above 1080p and a better quality
+    /// has not yet been found on the primary feed.
+    /// </summary>
+    public List<string> FallbackRssFeedUrls { get; set; } = [];
+
     public string YtDlpArchivePath { get; set; } = "/home/atom/.config/ytdl-archive.txt";
 
     public List<NewsSource> NewsSources { get; set; } = [];

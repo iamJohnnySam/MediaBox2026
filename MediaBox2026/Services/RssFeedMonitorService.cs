@@ -48,6 +48,7 @@ public class RssFeedMonitorService(
 
                 await CheckFeedAsync(ct);
                 await CheckPendingQualityAsync(ct);
+                await CheckFallbackFeedsForPendingAsync(ct);
 
                 state.LastRssCheck = DateTime.Now;
                 state.NotifyChange();
@@ -103,6 +104,7 @@ public class RssFeedMonitorService(
         {
             await CheckFeedAsync(ct);
             await CheckPendingQualityAsync(ct);
+            await CheckFallbackFeedsForPendingAsync(ct);
             state.LastRssCheck = DateTime.Now;
             state.NotifyChange();
             logger.LogInformation("✅ Manual RSS feed check completed");
@@ -674,6 +676,172 @@ public class RssFeedMonitorService(
         {
             logger.LogError(ex, "❌ Exception while sending immediate notification for: {Title}", item.RssTitle);
         }
+    }
+
+    /// <summary>
+    /// Scans configured fallback RSS feeds looking for acceptable-quality versions of pending
+    /// downloads whose current best quality is above 1080p.
+    ///
+    /// Safety guarantee: a torrent is dispatched from a fallback feed ONLY when the parsed title
+    /// produces an EXACT match (case-insensitive show name, identical season number, identical
+    /// episode number) against a specific pending record that we are already tracking.  Every
+    /// other item in the fallback feed is silently skipped — nothing unrelated can be dispatched.
+    /// </summary>
+    private async Task CheckFallbackFeedsForPendingAsync(CancellationToken ct)
+    {
+        var fallbackUrls = settings.CurrentValue.FallbackRssFeedUrls;
+        if (fallbackUrls == null || fallbackUrls.Count == 0)
+            return;
+
+        // Only bother if there are pending items whose quality is above 1080p
+        var abovePending = db.PendingDownloads
+            .Find(p => p.Status == PendingStatus.WaitingForQuality)
+            .Where(p => FileNameParser.IsAbove1080p(p.Quality))
+            .ToList();
+
+        if (abovePending.Count == 0)
+        {
+            logger.LogDebug("No above-1080p pending downloads — skipping fallback feed scan.");
+            return;
+        }
+
+        logger.LogInformation("🔍 Scanning {Count} fallback RSS feed(s) for better quality versions of {Pending} pending above-1080p item(s)",
+            fallbackUrls.Count, abovePending.Count);
+
+        using var http = httpFactory.CreateClient();
+        http.Timeout = TimeSpan.FromSeconds(30);
+        http.DefaultRequestHeaders.Add("User-Agent", "MediaBox2026/1.0");
+
+        foreach (var feedUrl in fallbackUrls)
+        {
+            if (string.IsNullOrWhiteSpace(feedUrl))
+                continue;
+
+            logger.LogInformation("📡 Fetching fallback RSS feed: {Url}", feedUrl);
+
+            string xml;
+            try
+            {
+                xml = await http.GetStringAsync(feedUrl, ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "❌ Failed to fetch fallback RSS feed: {Url}", feedUrl);
+                continue;
+            }
+
+            XDocument doc;
+            try
+            {
+                doc = XDocument.Parse(xml);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "❌ Failed to parse fallback RSS feed XML: {Url}", feedUrl);
+                continue;
+            }
+
+            var ns = doc.Root?.GetDefaultNamespace() ?? XNamespace.None;
+            var items = doc.Descendants(ns + "item").ToList();
+            if (items.Count == 0)
+                items = doc.Descendants("item").ToList();
+
+            logger.LogInformation("Fallback feed {Url} returned {Count} items — scanning for {Pending} specific episode(s) only",
+                feedUrl, items.Count, abovePending.Count);
+
+            foreach (var item in items)
+            {
+                var title = item.Element(ns + "title")?.Value ?? item.Element("title")?.Value ?? "";
+                var link  = item.Element(ns + "link")?.Value  ?? item.Element("link")?.Value  ?? "";
+                var enclosure  = item.Element(ns + "enclosure") ?? item.Element("enclosure");
+                var torrentUrl = enclosure?.Attribute("url")?.Value ?? link;
+
+                if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(torrentUrl))
+                    continue;
+
+                // Parse the title — if season/episode cannot be determined unambiguously, skip.
+                var parsed = FileNameParser.Parse(title);
+                if (!parsed.IsTvShow || !parsed.Season.HasValue || !parsed.Episode.HasValue)
+                    continue;
+
+                // Quality must be acceptable (≤ 720p); anything else from this feed is ignored.
+                var quality = FileNameParser.DetectQuality(title);
+                if (!FileNameParser.IsQualityAcceptable(quality))
+                    continue;
+
+                // The title must exactly match one of the pending records we are waiting on.
+                // All three fields must agree — show name, season and episode number.
+                // If any field doesn't match we skip immediately; nothing else is dispatched.
+                var pendingMatch = abovePending.FirstOrDefault(p =>
+                    string.Equals(p.ShowName, parsed.CleanName, StringComparison.OrdinalIgnoreCase) &&
+                    p.Season  == parsed.Season.Value &&
+                    p.Episode == parsed.Episode.Value);
+
+                if (pendingMatch == null)
+                {
+                    logger.LogDebug("Fallback item not in pending list — ignored entirely: {Title}", title);
+                    continue;
+                }
+
+                logger.LogInformation("✅ Fallback feed matched pending item — acceptable quality ({Quality}) found: {FallbackTitle} → waiting for: {PendingTitle}",
+                    quality, title, pendingMatch.RssTitle);
+
+                // Final safety: confirm not already dispatched or in library
+                if (db.DispatchedEpisodes.Exists(d =>
+                        d.ShowName == pendingMatch.ShowName &&
+                        d.Season   == pendingMatch.Season  &&
+                        d.Episode  == pendingMatch.Episode) ||
+                    catalog.HasEpisode(pendingMatch.ShowName, pendingMatch.Season, pendingMatch.Episode, null))
+                {
+                    logger.LogInformation("Episode already dispatched/in library, marking pending resolved: {Title}", pendingMatch.RssTitle);
+                    pendingMatch.Status = PendingStatus.Downloaded;
+                    db.PendingDownloads.Update(pendingMatch);
+                    abovePending.Remove(pendingMatch);
+                    continue;
+                }
+
+                var added = await transmission.AddTorrentAsync(torrentUrl, ct);
+                if (added)
+                {
+                    await telegram.SendMessageAsync(
+                        $"📥 Better quality found on fallback feed ({quality}): {title}", ct);
+                    state.AddActivity($"Fallback quality download: {title}");
+
+                    db.DispatchedEpisodes.Insert(new DispatchedEpisode
+                    {
+                        ShowName = pendingMatch.ShowName,
+                        Season   = pendingMatch.Season,
+                        Episode  = pendingMatch.Episode,
+                        DispatchedDate = DateTime.UtcNow
+                    });
+
+                    pendingMatch.Status = PendingStatus.Downloaded;
+                    db.PendingDownloads.Update(pendingMatch);
+
+                    if (pendingMatch.TelegramMessageId.HasValue)
+                    {
+                        await telegram.EditMessageAsync(
+                            pendingMatch.TelegramMessageId.Value,
+                            $"✅ BETTER QUALITY FOUND (fallback feed)\n\n{title}\nDownload started automatically.",
+                            ct);
+                    }
+
+                    abovePending.Remove(pendingMatch);
+                }
+
+                if (abovePending.Count == 0)
+                    break;
+            }
+
+            if (abovePending.Count == 0)
+            {
+                logger.LogInformation("All above-1080p pending items resolved via fallback feeds.");
+                break;
+            }
+        }
+
+        if (abovePending.Count > 0)
+            logger.LogInformation("Fallback feed scan complete. {Remaining} above-1080p pending item(s) still unresolved.", abovePending.Count);
     }
 
     private void MarkProcessed(string guid, string title)

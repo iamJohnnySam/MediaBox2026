@@ -142,6 +142,18 @@ public static partial class FileNameParser
         return true;
     }
 
+    /// <summary>
+    /// Returns true when the quality tag represents a resolution strictly above 1080p (e.g. 2160p / 4K).
+    /// </summary>
+    public static bool IsAbove1080p(string? quality)
+    {
+        if (string.IsNullOrEmpty(quality)) return false;
+        var match = Regex.Match(quality, @"(\d+)");
+        if (match.Success && int.TryParse(match.Groups[1].Value, out var res))
+            return res > 1080;
+        return false;
+    }
+
     public static string? DetectQuality(string text)
     {
         var match = QualityRegex().Match(text);
