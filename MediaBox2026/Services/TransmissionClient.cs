@@ -124,6 +124,43 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
         return false;
     }
 
+    public async Task<bool?> GetAltSpeedEnabledAsync(CancellationToken ct = default)
+    {
+        var request = new JsonObject
+        {
+            ["method"] = "session-get",
+            ["arguments"] = new JsonObject
+            {
+                ["fields"] = new JsonArray { JsonValue.Create("alt-speed-enabled") }
+            }
+        };
+        var result = await SendRpcAsync(request, ct);
+        if (result == null) return null;
+        if (result.Value.TryGetProperty("arguments", out var args) &&
+            args.TryGetProperty("alt-speed-enabled", out var prop))
+            return prop.GetBoolean();
+        return null;
+    }
+
+    public async Task<bool> SetAltSpeedAsync(bool enabled, CancellationToken ct = default)
+    {
+        var request = new JsonObject
+        {
+            ["method"] = "session-set",
+            ["arguments"] = new JsonObject
+            {
+                ["alt-speed-enabled"] = enabled
+            }
+        };
+        var result = await SendRpcAsync(request, ct);
+        if (result != null)
+        {
+            logger.LogInformation("Transmission alt speed {State}", enabled ? "enabled" : "disabled");
+            return true;
+        }
+        return false;
+    }
+
     private async Task<JsonElement?> SendRpcAsync(JsonObject request, CancellationToken ct, bool retry = true)
     {
         var config = settings.CurrentValue;

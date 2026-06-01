@@ -1,0 +1,302 @@
+{
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\restart-mediabox.ps1": {
+    "mtime": 1776822499.4183686,
+    "ast_hash": "2030a4c75b3f54ca810619386fbba439",
+    "semantic_hash": "2030a4c75b3f54ca810619386fbba439"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\appsettings.Development.json": {
+    "mtime": 1775043321.4161117,
+    "ast_hash": "804b473502a4c415cf75db61c56c32aa",
+    "semantic_hash": "804b473502a4c415cf75db61c56c32aa"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\appsettings.json": {
+    "mtime": 1778116459.6442864,
+    "ast_hash": "9fd5b05c48554da85a586b249ce6b973",
+    "semantic_hash": "9fd5b05c48554da85a586b249ce6b973"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\DiagnosticNewsFeed.cs": {
+    "mtime": 1776954647.9343438,
+    "ast_hash": "94c2bc100b5472d4817764fb4ff90548",
+    "semantic_hash": "94c2bc100b5472d4817764fb4ff90548"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\dotnet-tools.json": {
+    "mtime": 1775056857.2801914,
+    "ast_hash": "07dc482d905ab4d4ed3d13927dda3361",
+    "semantic_hash": "07dc482d905ab4d4ed3d13927dda3361"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\MediaBox2026.csproj": {
+    "mtime": 1775879248.588408,
+    "ast_hash": "c7887821c4a3d286df9a3efc6c5d1a4a",
+    "semantic_hash": "c7887821c4a3d286df9a3efc6c5d1a4a"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Program.cs": {
+    "mtime": 1777080821.60715,
+    "ast_hash": "d419aa4fca17add5369838c88d1b3e1b",
+    "semantic_hash": "d419aa4fca17add5369838c88d1b3e1b"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\App.razor": {
+    "mtime": 1775043321.650697,
+    "ast_hash": "41f13005f9e3dc667e732dfa2d6b4190",
+    "semantic_hash": "41f13005f9e3dc667e732dfa2d6b4190"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\Routes.razor": {
+    "mtime": 1775181258.988814,
+    "ast_hash": "e7369bc27ad40e65009faaaa1e965d93",
+    "semantic_hash": "e7369bc27ad40e65009faaaa1e965d93"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\_Imports.razor": {
+    "mtime": 1775043321.6646688,
+    "ast_hash": "69d31bdceedb35e9f8ff53801d5a763e",
+    "semantic_hash": "69d31bdceedb35e9f8ff53801d5a763e"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\Layout\\MainLayout.razor": {
+    "mtime": 1775043322.121699,
+    "ast_hash": "75c29fc34d23b44674da8967cc116287",
+    "semantic_hash": "75c29fc34d23b44674da8967cc116287"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\Layout\\NavMenu.razor": {
+    "mtime": 1775049999.1109345,
+    "ast_hash": "cc15b025a626307bab988a8e6f827952",
+    "semantic_hash": "cc15b025a626307bab988a8e6f827952"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\Layout\\ReconnectModal.razor": {
+    "mtime": 1775043322.1319149,
+    "ast_hash": "2f2378bed0d87a86800610190fd1da17",
+    "semantic_hash": "2f2378bed0d87a86800610190fd1da17"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\Layout\\ReconnectModal.razor.js": {
+    "mtime": 1775043322.134871,
+    "ast_hash": "bdc7a0873231c569cd31aa85311186a3",
+    "semantic_hash": "bdc7a0873231c569cd31aa85311186a3"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\Pages\\Downloads.razor": {
+    "mtime": 1775044401.3912237,
+    "ast_hash": "f060112ebcc4865894a226501ad118d9",
+    "semantic_hash": "f060112ebcc4865894a226501ad118d9"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\Pages\\Error.razor": {
+    "mtime": 1775043321.3646579,
+    "ast_hash": "895aa385b310af50d09fd583be83b251",
+    "semantic_hash": "895aa385b310af50d09fd583be83b251"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\Pages\\Home.razor": {
+    "mtime": 1775044424.9681487,
+    "ast_hash": "15fb1783d52441ed496a7b8209354b88",
+    "semantic_hash": "15fb1783d52441ed496a7b8209354b88"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\Pages\\Logs.razor": {
+    "mtime": 1775049854.18699,
+    "ast_hash": "3c53561bf59de563dcd0c748a4635e79",
+    "semantic_hash": "3c53561bf59de563dcd0c748a4635e79"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\Pages\\Movies.razor": {
+    "mtime": 1775044401.3587291,
+    "ast_hash": "bdb9f5dd0812e4de1c9c3943dfeed792",
+    "semantic_hash": "bdb9f5dd0812e4de1c9c3943dfeed792"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\Pages\\NotFound.razor": {
+    "mtime": 1775043321.3666582,
+    "ast_hash": "b43132764687de5710f24e46d3d3f7ff",
+    "semantic_hash": "b43132764687de5710f24e46d3d3f7ff"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\Pages\\Settings.razor": {
+    "mtime": 1778030612.9285748,
+    "ast_hash": "30d865e34dc773d91c075b2d278ffc17",
+    "semantic_hash": "30d865e34dc773d91c075b2d278ffc17"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\Pages\\TvShows.razor": {
+    "mtime": 1775044401.410325,
+    "ast_hash": "7bf8bf4f40a79d7b6ce1c6a5f53a4525",
+    "semantic_hash": "7bf8bf4f40a79d7b6ce1c6a5f53a4525"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\Pages\\Watchlist.razor": {
+    "mtime": 1775044401.3736546,
+    "ast_hash": "fe58eb0b9b0ff4333290104c5e32611b",
+    "semantic_hash": "fe58eb0b9b0ff4333290104c5e32611b"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Components\\Pages\\YouTube.razor": {
+    "mtime": 1775044401.3244445,
+    "ast_hash": "e36edb7eb19351e64653859b0bc91396",
+    "semantic_hash": "e36edb7eb19351e64653859b0bc91396"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Models\\MediaModels.cs": {
+    "mtime": 1778115948.6502824,
+    "ast_hash": "d2fa4f72db28a7bea73fd2654fdc663d",
+    "semantic_hash": "d2fa4f72db28a7bea73fd2654fdc663d"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Properties\\launchSettings.json": {
+    "mtime": 1775043321.395739,
+    "ast_hash": "c6fd1a4fe656abbdf33f1c922a798525",
+    "semantic_hash": "c6fd1a4fe656abbdf33f1c922a798525"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\CrashReporter.cs": {
+    "mtime": 1777091662.2098224,
+    "ast_hash": "c668a02e231ffd1bd85aaed97ef8009d",
+    "semantic_hash": "c668a02e231ffd1bd85aaed97ef8009d"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\DownloadOrganizerService.cs": {
+    "mtime": 1778029908.8115723,
+    "ast_hash": "f775e2b5369cfa9d41763e26a8643b10",
+    "semantic_hash": "f775e2b5369cfa9d41763e26a8643b10"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\FallbackComponentActivator.cs": {
+    "mtime": 1775202386.0002902,
+    "ast_hash": "a6cadb1a5640c64f742e4146daaaa096",
+    "semantic_hash": "a6cadb1a5640c64f742e4146daaaa096"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\FileNameParser.cs": {
+    "mtime": 1778115955.4147017,
+    "ast_hash": "d9e62c44a3232c2d5e83bf883a76a9eb",
+    "semantic_hash": "d9e62c44a3232c2d5e83bf883a76a9eb"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\InMemoryLogProvider.cs": {
+    "mtime": 1775052621.1431136,
+    "ast_hash": "390fdcaf5b116098568c5fe81e9a0a88",
+    "semantic_hash": "390fdcaf5b116098568c5fe81e9a0a88"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\JellyfinClient.cs": {
+    "mtime": 1780274052.6389904,
+    "ast_hash": "153b7e73fb87673f68578158aec2cef7",
+    "semantic_hash": "153b7e73fb87673f68578158aec2cef7"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\MediaBoxState.cs": {
+    "mtime": 1778030547.192124,
+    "ast_hash": "a69683f7d8a4caccd6924ddb458b1f11",
+    "semantic_hash": "a69683f7d8a4caccd6924ddb458b1f11"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\MediaCatalogService.cs": {
+    "mtime": 1775888981.2789168,
+    "ast_hash": "487fa81ac3fc075e44df8171819e5fb9",
+    "semantic_hash": "487fa81ac3fc075e44df8171819e5fb9"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\MediaDatabase.cs": {
+    "mtime": 1777087142.358946,
+    "ast_hash": "3ead12fa78fd0c2fee4bb232128d726f",
+    "semantic_hash": "3ead12fa78fd0c2fee4bb232128d726f"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\MediaScannerService.cs": {
+    "mtime": 1776907380.6287763,
+    "ast_hash": "adbd68fda7ff689c379d1537ede48fea",
+    "semantic_hash": "adbd68fda7ff689c379d1537ede48fea"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\MovieWatchlistService.cs": {
+    "mtime": 1776907291.4210904,
+    "ast_hash": "4e11f233d823fccad760129bfa5bae21",
+    "semantic_hash": "4e11f233d823fccad760129bfa5bae21"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\NewsRssFeedService.cs": {
+    "mtime": 1776906967.5680716,
+    "ast_hash": "886f9568a91f248ead945ef9b9bc9eb4",
+    "semantic_hash": "886f9568a91f248ead945ef9b9bc9eb4"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\RssFeedMonitorService.cs": {
+    "mtime": 1778116457.170743,
+    "ast_hash": "d09da75e1b8fffca40ceaf385f13da48",
+    "semantic_hash": "d09da75e1b8fffca40ceaf385f13da48"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\TelegramAuthStore.cs": {
+    "mtime": 1777087174.3218093,
+    "ast_hash": "c91e239c6b1cd03c21a10a0af752c404",
+    "semantic_hash": "c91e239c6b1cd03c21a10a0af752c404"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\TelegramBotService.cs": {
+    "mtime": 1780273997.863411,
+    "ast_hash": "ac5e694733b4b1861d628ba22fdd4fee",
+    "semantic_hash": "ac5e694733b4b1861d628ba22fdd4fee"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\TelegramExtensions.cs": {
+    "mtime": 1776821073.6885867,
+    "ast_hash": "4c94d822df94361da08a2d531eaa9c4f",
+    "semantic_hash": "4c94d822df94361da08a2d531eaa9c4f"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\TransmissionClient.cs": {
+    "mtime": 1779238055.698448,
+    "ast_hash": "5a918fe949ad0c58ee5a4031b4c5ecc9",
+    "semantic_hash": "5a918fe949ad0c58ee5a4031b4c5ecc9"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\TransmissionMonitorService.cs": {
+    "mtime": 1776907206.2741802,
+    "ast_hash": "950a8a7684db786c1b02c96065302e20",
+    "semantic_hash": "950a8a7684db786c1b02c96065302e20"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\Services\\YouTubeDownloadService.cs": {
+    "mtime": 1778030568.7306328,
+    "ast_hash": "6a632201ad2d73e59f2d082eaab224a2",
+    "semantic_hash": "6a632201ad2d73e59f2d082eaab224a2"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\CODE_IMPROVEMENTS.md": {
+    "mtime": 1776907531.2151349,
+    "ast_hash": "acb298b3e42bd804bc9bb15007669b46",
+    "semantic_hash": "acb298b3e42bd804bc9bb15007669b46"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\IMPLEMENTATION_SUMMARY.md": {
+    "mtime": 1776954996.857099,
+    "ast_hash": "dbc7e154538a2d54327c7efe5eb884b0",
+    "semantic_hash": "dbc7e154538a2d54327c7efe5eb884b0"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\IMPROVEMENTS_IMPLEMENTATION_SUMMARY.md": {
+    "mtime": 1776907490.574453,
+    "ast_hash": "50401da574747c1b9e8c5427e76696e8",
+    "semantic_hash": "50401da574747c1b9e8c5427e76696e8"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\IMPROVEMENTS_README.md": {
+    "mtime": 1776907703.3382194,
+    "ast_hash": "7473643fcf6b1c85740dfbf4baf736c2",
+    "semantic_hash": "7473643fcf6b1c85740dfbf4baf736c2"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\LICENSE.txt": {
+    "mtime": 1775051261.6042566,
+    "ast_hash": "6d75c57c64742ead9ffcc475c56b4ad0",
+    "semantic_hash": "6d75c57c64742ead9ffcc475c56b4ad0"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\LOGGING.md": {
+    "mtime": 1775889375.9792583,
+    "ast_hash": "c79ca58c0b99f14a0d045d5e0227b65d",
+    "semantic_hash": "c79ca58c0b99f14a0d045d5e0227b65d"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\LOG_FILE_NAMING.md": {
+    "mtime": 1775889413.952364,
+    "ast_hash": "f3a46ee32ad104c8ae6fd0274e27b303",
+    "semantic_hash": "f3a46ee32ad104c8ae6fd0274e27b303"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\PROJECT_AUDIT_AND_IMPROVEMENTS.md": {
+    "mtime": 1776907168.0753171,
+    "ast_hash": "82f059977eb395840f2a8c4b1ac060d0",
+    "semantic_hash": "82f059977eb395840f2a8c4b1ac060d0"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\PROJECT_COMPLETION_SUMMARY.md": {
+    "mtime": 1776907669.378978,
+    "ast_hash": "06267dabbcf74ba998245c1ea0414831",
+    "semantic_hash": "06267dabbcf74ba998245c1ea0414831"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\QUICK_START_GUIDE.md": {
+    "mtime": 1776907600.065644,
+    "ast_hash": "f218605962b6eec18d7da0a1b6219927",
+    "semantic_hash": "f218605962b6eec18d7da0a1b6219927"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\README.md": {
+    "mtime": 1775142747.960019,
+    "ast_hash": "ff4ca05b9681ac935b0e0bf768fd9f72",
+    "semantic_hash": "ff4ca05b9681ac935b0e0bf768fd9f72"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\RESET_QUALITY_FEATURE.md": {
+    "mtime": 1776822160.6589649,
+    "ast_hash": "c2f025e18d630ed22497fb180484826a",
+    "semantic_hash": "c2f025e18d630ed22497fb180484826a"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\RSS_NEWS_FEEDS.md": {
+    "mtime": 1776954865.4734452,
+    "ast_hash": "b73e67d983ceca65f43967ac6d2d5f55",
+    "semantic_hash": "b73e67d983ceca65f43967ac6d2d5f55"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\RSS_NEWS_TROUBLESHOOTING.md": {
+    "mtime": 1776954953.8540463,
+    "ast_hash": "5b9aea871609070c9127bd2a2754891d",
+    "semantic_hash": "5b9aea871609070c9127bd2a2754891d"
+  },
+  "C:\\Users\\johns\\source\\repos\\MediaBox2026\\MediaBox2026\\wwwroot\\favicon.png": {
+    "mtime": 1775043321.4001088,
+    "ast_hash": "eab4f24ab5ff80be586dcdab8e87dc9c",
+    "semantic_hash": "eab4f24ab5ff80be586dcdab8e87dc9c"
+  }
+}

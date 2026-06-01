@@ -65,11 +65,21 @@ public class TelegramBotService(
 
     private readonly HttpClient _http = new();
     private long _offset;
+    private int _pollFailureCount;
+    private static readonly TimeSpan BasePollRetryDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan MaxPollRetryDelay = TimeSpan.FromMinutes(2);
 
     public ConcurrentDictionary<string, TaskCompletionSource<string>> PendingCallbacks { get; } = new();
     private readonly ConcurrentDictionary<long, MovieSession> _movieSessions = new();
 
     private string ApiUrl => $"https://api.telegram.org/bot{settings.CurrentValue.TelegramBotToken}";
+
+    private TimeSpan GetPollRetryDelay()
+    {
+        var exponent = Math.Clamp(_pollFailureCount - 1, 0, 4);
+        var delaySeconds = Math.Min(BasePollRetryDelay.TotalSeconds * Math.Pow(2, exponent), MaxPollRetryDelay.TotalSeconds);
+        return TimeSpan.FromSeconds(delaySeconds);
+    }
 
     public async Task SendPhotoAsync(string photoUrl, string caption, List<List<InlineButton>>? buttons = null, CancellationToken ct = default)
     {
@@ -251,12 +261,15 @@ public class TelegramBotService(
             try
             {
                 await PollUpdatesAsync(ct);
+                _pollFailureCount = 0;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Telegram polling error");
-                await Task.Delay(5000, ct);
+                _pollFailureCount++;
+                var retryDelay = GetPollRetryDelay();
+                logger.LogError(ex, "Telegram polling error. Backing off for {Delay} after {FailureCount} consecutive failures.", retryDelay, _pollFailureCount);
+                await Task.Delay(retryDelay, ct);
             }
         }
     }
@@ -404,6 +417,7 @@ public class TelegramBotService(
                     "📋 *Admin Commands:*\n" +
                     "/status - System status\n" +
                     "/downloads - Active downloads\n" +
+                    "/speedmode - Toggle Transmission turtle (alt speed) mode\n" +
                     "/watchlist - Movie watchlist\n" +
                     "/movie Movie Name - Search & add movie\n" +
                     "/add Movie Name - Quick add to watchlist\n" +
@@ -451,6 +465,37 @@ public class TelegramBotService(
                     foreach (var tor in torrents)
                         sb.AppendLine($"• {tor.Name} - {tor.PercentDone:P0} ({tor.StatusText})");
                     await SendToChatAsync(chatId, sb.ToString(), ct, parseMode: "Markdown");
+                }
+                break;
+
+            case "/speedmode":
+            case "/turtle":
+                try
+                {
+                    var current = await transmission.GetAltSpeedEnabledAsync(ct);
+                    if (current == null)
+                    {
+                        await SendToChatAsync(chatId, "❌ Could not reach Transmission. Check your settings.", ct);
+                        break;
+                    }
+                    var newState = !current.Value;
+                    var success = await transmission.SetAltSpeedAsync(newState, ct);
+                    if (success)
+                    {
+                        var icon = newState ? "🐢" : "🚀";
+                        var label = newState ? "Turtle (alt speed) mode *enabled*" : "Normal speed mode *enabled*";
+                        await SendToChatAsync(chatId, $"{icon} {label}", ct, parseMode: "Markdown");
+                        state.AddActivity($"Transmission speed mode: {(newState ? "alt/turtle" : "normal")}");
+                    }
+                    else
+                    {
+                        await SendToChatAsync(chatId, "❌ Failed to change Transmission speed mode.", ct);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error toggling Transmission speed mode");
+                    await SendToChatAsync(chatId, $"❌ Error: {ex.Message}", ct);
                 }
                 break;
 
@@ -1174,8 +1219,9 @@ public class TelegramBotService(
 
                 if (attempt < maxRetries)
                 {
-                    logger.LogInformation("Retrying in {Delay}ms...", retryDelayMs * attempt);
-                    await Task.Delay(retryDelayMs * attempt, ct);
+                    var delay = TimeSpan.FromMilliseconds(retryDelayMs * attempt * attempt);
+                    logger.LogInformation("Retrying in {Delay}...", delay);
+                    await Task.Delay(delay, ct);
                 }
             }
             catch (TaskCanceledException) when (ct.IsCancellationRequested)
