@@ -248,25 +248,6 @@ public class InlineButton
     public string CallbackData { get; set; } = "";
 }
 
-public class RssFeedSubscription : IEntity
-{
-    public int Id { get; set; }
-    public string FeedUrl { get; set; } = "";
-    public string FeedName { get; set; } = "";
-    public DateTime SubscribedDate { get; set; }
-    public DateTime? LastChecked { get; set; }
-    public bool IsActive { get; set; } = true;
-}
-
-public class ProcessedFeedItem : IEntity
-{
-    public int Id { get; set; }
-    public int SubscriptionId { get; set; }
-    public string ItemGuid { get; set; } = "";
-    public string Title { get; set; } = "";
-    public DateTime ProcessedDate { get; set; }
-}
-
 public class TelegramSubscriber : IEntity
 {
     public int Id { get; set; }

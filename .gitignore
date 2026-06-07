@@ -6,6 +6,12 @@
 # MediaBox secrets (tokens, passwords)
 **/appsettings.Secrets.json
 
+# SQLite database
+data/
+*.db
+*.db-shm
+*.db-wal
+
 # User-specific files
 *.rsuser
 *.suo

@@ -106,7 +106,6 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<YouTubeDownloadSer
 
 // Other background services
 builder.Services.AddHostedService<MediaScannerService>();
-builder.Services.AddHostedService<NewsRssFeedService>();
 builder.Services.AddHostedService<TransmissionMonitorService>();
 builder.Services.AddHostedService<DownloadOrganizerService>();
 builder.Services.AddHostedService<MovieWatchlistService>();

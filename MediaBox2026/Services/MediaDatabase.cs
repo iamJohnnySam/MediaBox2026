@@ -27,8 +27,6 @@ public class MediaDatabase : IDisposable
     public DbCollection<ProcessedRssItem> ProcessedRssItems { get; }
     public DbCollection<DispatchedEpisode> DispatchedEpisodes { get; }
     public DbCollection<PendingLargeTorrent> PendingLargeTorrents { get; }
-    public DbCollection<RssFeedSubscription> RssFeedSubscriptions { get; }
-    public DbCollection<ProcessedFeedItem> ProcessedFeedItems { get; }
     public DbCollection<NotifiedDuplicate> NotifiedDuplicates { get; }
     public DbCollection<TelegramSubscriber> TelegramSubscribers { get; }
     public DbCollection<TelegramAdmin> TelegramAdmins { get; }
@@ -95,8 +93,6 @@ public class MediaDatabase : IDisposable
         ProcessedRssItems = new DbCollection<ProcessedRssItem>(_db, DbLock, "rss_processed", JsonOpts);
         DispatchedEpisodes = new DbCollection<DispatchedEpisode>(_db, DbLock, "dispatched", JsonOpts);
         PendingLargeTorrents = new DbCollection<PendingLargeTorrent>(_db, DbLock, "pending_large_torrents", JsonOpts);
-        RssFeedSubscriptions = new DbCollection<RssFeedSubscription>(_db, DbLock, "rss_feed_subscriptions", JsonOpts);
-        ProcessedFeedItems = new DbCollection<ProcessedFeedItem>(_db, DbLock, "processed_feed_items", JsonOpts);
         NotifiedDuplicates = new DbCollection<NotifiedDuplicate>(_db, DbLock, "notified_duplicates", JsonOpts);
         TelegramSubscribers = new DbCollection<TelegramSubscriber>(_db, DbLock, "telegram_subscribers", JsonOpts);
         TelegramAdmins = new DbCollection<TelegramAdmin>(_db, DbLock, "telegram_admins", JsonOpts);
