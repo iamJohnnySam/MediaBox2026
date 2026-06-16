@@ -1,0 +1,41 @@
+syntax = "proto3";
+option csharp_namespace = "Tower.Telegram.Grpc";
+package tower.telegram;
+
+service TowerTelegram {
+  rpc StreamUpdates(StreamRequest) returns (stream Update);      // Tower -> MediaBox (incoming msgs + callbacks)
+  rpc SyncSubscribers(SubscriberList) returns (Ack);             // MediaBox -> Tower one-time subscriber import
+  rpc SendMessage(SendMessageRequest) returns (SendResult);
+  rpc SendPhoto(SendPhotoRequest) returns (SendResult);
+  rpc SendInlineKeyboard(InlineKeyboardRequest) returns (SendResult); // SendResult.message_id set
+  rpc EditMessage(EditMessageRequest) returns (SendResult);
+  rpc AnswerCallback(AnswerCallbackRequest) returns (Ack);
+  rpc ListSubscribers(Empty) returns (SubscriberList);
+}
+
+enum Audience { CHAT = 0; ADMIN = 1; SUBSCRIBERS = 2; }
+
+message StreamRequest { string client_id = 1; }
+message Update {
+  oneof kind {
+    IncomingMessage message = 1;
+    CallbackQuery   callback = 2;
+  }
+}
+message IncomingMessage { int64 chat_id = 1; string text = 2; string username = 3; string first_name = 4; string last_name = 5; }
+message CallbackQuery   { int64 chat_id = 1; string callback_id = 2; string data = 3; int32 message_id = 4; }
+
+message SendMessageRequest    { Audience audience = 1; int64 chat_id = 2; string text = 3; string parse_mode = 4; }
+message SendPhotoRequest      { Audience audience = 1; int64 chat_id = 2; string photo_url = 3; string caption = 4; repeated ButtonRow buttons = 5; string parse_mode = 6; }
+message InlineKeyboardRequest { int64 chat_id = 1; string text = 2; repeated ButtonRow buttons = 3; string parse_mode = 4; }
+message EditMessageRequest    { int64 chat_id = 1; int32 message_id = 2; string text = 3; string parse_mode = 4; repeated ButtonRow buttons = 5; }
+message AnswerCallbackRequest { string callback_id = 1; string text = 2; }
+
+message ButtonRow { repeated Button buttons = 1; }
+message Button    { string text = 1; string callback_data = 2; }
+
+message SendResult     { bool ok = 1; int32 message_id = 2; string error = 3; }
+message SubscriberList { repeated Subscriber subscribers = 1; }
+message Subscriber     { int64 chat_id = 1; string name = 2; bool is_admin = 3; }
+message Ack   { bool ok = 1; }
+message Empty {}

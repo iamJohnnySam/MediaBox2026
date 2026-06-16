@@ -196,6 +196,10 @@ public class MediaBoxSettings
     public int QualityWaitHours { get; set; } = 4;
     public int MediaScanHours { get; set; } = 12;
     public bool YouTubeDownloadPaused { get; set; } = false;
+
+    // Tower gRPC bridge (off by default — MediaBox uses its local bot when false)
+    public bool UseTowerTelegram { get; set; } = false;
+    public string TowerGrpcUrl { get; set; } = "http://localhost:5601";
 }
 
 public class NewsSource
