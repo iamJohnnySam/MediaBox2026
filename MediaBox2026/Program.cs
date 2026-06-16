@@ -8,7 +8,11 @@ using Serilog.Events;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.WebHost.UseUrls("http://0.0.0.0:5000");
+builder.WebHost.ConfigureKestrel(o =>
+{
+	o.ListenAnyIP(5000); // existing Blazor UI (HTTP/1.1 + 2)
+	o.ListenAnyIP(5602, l => l.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http2); // gRPC h2c
+});
 
 // Load secrets file (gitignored) — overrides appsettings.json for sensitive values
 // Use AppContext.BaseDirectory so the file is found next to the binary regardless of CWD
@@ -81,6 +85,9 @@ builder.Services.PostConfigure<MediaBoxSettings>(settings =>
 		return path;
 	}
 });
+
+// gRPC control server (MediaBoxControl) — Tower -> MediaBox channel on :5602
+builder.Services.AddGrpc();
 
 // Core services
 builder.Services.AddSingleton<MediaDatabase>();
@@ -195,6 +202,7 @@ app.MapGet("/health", (MediaBoxState state, MediaDatabase db) =>
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
 	.AddInteractiveServerRenderMode();
+app.MapGrpcService<MediaBoxControlService>();
 
 // Initialize crash reporter eagerly (subscribes to log events)
 var crashReporter = app.Services.GetRequiredService<CrashReporter>();
