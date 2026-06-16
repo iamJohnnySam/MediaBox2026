@@ -40,18 +40,8 @@ public class MovieWatchlistService(
         {
             try
             {
-                logger.LogInformation("=== Watchlist Check Cycle Starting ===");
-                if (_consecutiveFailures > 0)
-                {
-                    logger.LogWarning("⚠️ Consecutive failures: {Count}/{Max}", _consecutiveFailures, MaxConsecutiveFailures);
-                }
-
-                var checkStart = DateTime.UtcNow;
-                await CheckWatchlistAsync(ct);
+                await RunOnceAsync(ct);
                 _consecutiveFailures = 0; // Reset on success
-
-                var duration = DateTime.UtcNow - checkStart;
-                logger.LogInformation("✅ Watchlist check cycle completed in {Duration:F1}s", duration.TotalSeconds);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -87,6 +77,25 @@ public class MovieWatchlistService(
                 break;
             }
         }
+    }
+
+    /// <summary>
+    /// Runs one watchlist check cycle. This is the per-cycle work that ExecuteAsync's loop runs
+    /// on a timer; it's also callable directly (e.g. via gRPC trigger).
+    /// </summary>
+    public async Task RunOnceAsync(CancellationToken ct)
+    {
+        logger.LogInformation("=== Watchlist Check Cycle Starting ===");
+        if (_consecutiveFailures > 0)
+        {
+            logger.LogWarning("⚠️ Consecutive failures: {Count}/{Max}", _consecutiveFailures, MaxConsecutiveFailures);
+        }
+
+        var checkStart = DateTime.UtcNow;
+        await CheckWatchlistAsync(ct);
+
+        var duration = DateTime.UtcNow - checkStart;
+        logger.LogInformation("✅ Watchlist check cycle completed in {Duration:F1}s", duration.TotalSeconds);
     }
 
     private async Task CheckWatchlistAsync(CancellationToken ct)

@@ -43,24 +43,13 @@ public class RssFeedMonitorService(
         {
             try
             {
-                logger.LogInformation("=== RSS Feed Check Cycle Starting ===");
-                var checkStart = DateTime.UtcNow;
-
-                await CheckFeedAsync(ct);
-                await CheckPendingQualityAsync(ct);
-                await CheckFallbackFeedsForPendingAsync(ct);
-
-                state.LastRssCheck = DateTime.Now;
-                state.NotifyChange();
-
+                await RunOnceAsync(ct);
                 consecutiveFailures = 0; // Reset on success
-                var duration = DateTime.UtcNow - checkStart;
-                logger.LogInformation("✅ RSS feed check cycle completed in {Duration:F1}s", duration.TotalSeconds);
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) 
-            { 
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
                 logger.LogInformation("RSS feed monitor shutting down...");
-                break; 
+                break;
             }
             catch (HttpRequestException hex)
             {
@@ -92,6 +81,27 @@ public class RssFeedMonitorService(
         }
 
         logger.LogInformation("🛑 RSS feed monitor stopped");
+    }
+
+    /// <summary>
+    /// Runs one RSS feed check cycle: fetch the primary feed, re-check pending quality items,
+    /// and scan fallback feeds for pending above-1080p items. This is the per-cycle work that
+    /// ExecuteAsync's loop runs on a timer; it's also callable directly (e.g. via gRPC trigger).
+    /// </summary>
+    public async Task RunOnceAsync(CancellationToken ct)
+    {
+        logger.LogInformation("=== RSS Feed Check Cycle Starting ===");
+        var checkStart = DateTime.UtcNow;
+
+        await CheckFeedAsync(ct);
+        await CheckPendingQualityAsync(ct);
+        await CheckFallbackFeedsForPendingAsync(ct);
+
+        state.LastRssCheck = DateTime.Now;
+        state.NotifyChange();
+
+        var duration = DateTime.UtcNow - checkStart;
+        logger.LogInformation("✅ RSS feed check cycle completed in {Duration:F1}s", duration.TotalSeconds);
     }
 
     /// <summary>

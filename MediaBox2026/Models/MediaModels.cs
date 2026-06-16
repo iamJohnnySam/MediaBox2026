@@ -200,6 +200,11 @@ public class MediaBoxSettings
     // Tower gRPC bridge (off by default — MediaBox uses its local bot when false)
     public bool UseTowerTelegram { get; set; } = false;
     public string TowerGrpcUrl { get; set; } = "http://localhost:5601";
+
+    // When true (today's behavior), the 7 capability services self-schedule via their own
+    // BackgroundService loops. When false, they're registered as singletons only (no timer
+    // loops) and are driven externally via RunOnceAsync (e.g. by Tower over gRPC).
+    public bool SelfSchedule { get; set; } = false;
 }
 
 public class NewsSource

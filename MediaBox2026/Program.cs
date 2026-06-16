@@ -136,19 +136,35 @@ else
     builder.Services.AddHostedService(sp => sp.GetRequiredService<TelegramBotService>());
 }
 
-// RSS Feed Monitor (singleton + hosted service for manual triggering)
-builder.Services.AddSingleton<RssFeedMonitorService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<RssFeedMonitorService>());
+// The 7 capability services are ALWAYS registered as singletons (so their RunOnceAsync is
+// resolvable/callable by the gRPC triggers), but are only registered as hosted services
+// (i.e. self-scheduling via their own BackgroundService timer loop) when SelfSchedule is on.
+//   ON  (today's behavior): hosted + self-scheduling, exactly as before.
+//   OFF (default): singletons only — no timer loops; Tower drives them via gRPC instead.
+var selfSchedule = builder.Configuration.GetSection("MediaBox").GetValue<bool>("SelfSchedule");
 
-// YouTube Download Service (singleton + hosted service for manual triggering)
+// RSS Feed Monitor
+builder.Services.AddSingleton<RssFeedMonitorService>();
+if (selfSchedule)
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<RssFeedMonitorService>());
+
+// YouTube Download Service
 builder.Services.AddSingleton<YouTubeDownloadService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<YouTubeDownloadService>());
+if (selfSchedule)
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<YouTubeDownloadService>());
 
 // Other background services
-builder.Services.AddHostedService<MediaScannerService>();
-builder.Services.AddHostedService<TransmissionMonitorService>();
-builder.Services.AddHostedService<DownloadOrganizerService>();
-builder.Services.AddHostedService<MovieWatchlistService>();
+builder.Services.AddSingleton<MediaScannerService>();
+builder.Services.AddSingleton<TransmissionMonitorService>();
+builder.Services.AddSingleton<DownloadOrganizerService>();
+builder.Services.AddSingleton<MovieWatchlistService>();
+if (selfSchedule)
+{
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<MediaScannerService>());
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<TransmissionMonitorService>());
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<DownloadOrganizerService>());
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<MovieWatchlistService>());
+}
 
 // Crash reporter (subscribes to error logs, sends Telegram + saves crash data)
 builder.Services.AddSingleton<CrashReporter>();

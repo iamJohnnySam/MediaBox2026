@@ -55,18 +55,8 @@ public class MediaScannerService(
             {
                 await Task.Delay(TimeSpan.FromHours(settings.CurrentValue.MediaScanHours), ct);
 
-                logger.LogInformation("=== Periodic Media Scan Starting ===");
-                if (_consecutiveFailures > 0)
-                {
-                    logger.LogWarning("⚠️ Consecutive failures: {Count}/{Max}", _consecutiveFailures, MaxConsecutiveFailures);
-                }
-
-                var scanStart = DateTime.UtcNow;
-                await catalog.ScanAllAsync(ct);
+                await RunOnceAsync(ct);
                 _consecutiveFailures = 0; // Reset on success
-
-                var duration = DateTime.UtcNow - scanStart;
-                logger.LogInformation("✅ Periodic media scan completed in {Duration:F1}s", duration.TotalSeconds);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -85,5 +75,24 @@ public class MediaScannerService(
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Runs one periodic media scan cycle. This is the per-cycle work that ExecuteAsync's loop
+    /// runs on a timer; it's also callable directly (e.g. via gRPC trigger).
+    /// </summary>
+    public async Task RunOnceAsync(CancellationToken ct)
+    {
+        logger.LogInformation("=== Periodic Media Scan Starting ===");
+        if (_consecutiveFailures > 0)
+        {
+            logger.LogWarning("⚠️ Consecutive failures: {Count}/{Max}", _consecutiveFailures, MaxConsecutiveFailures);
+        }
+
+        var scanStart = DateTime.UtcNow;
+        await catalog.ScanAllAsync(ct);
+
+        var duration = DateTime.UtcNow - scanStart;
+        logger.LogInformation("✅ Periodic media scan completed in {Duration:F1}s", duration.TotalSeconds);
     }
 }
