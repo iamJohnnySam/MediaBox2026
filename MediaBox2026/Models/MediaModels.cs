@@ -129,6 +129,7 @@ public class TorrentInfo
     public long TotalSize { get; set; }
     public string? DownloadDir { get; set; }
     public long DateAdded { get; set; }
+    public long RateDownload { get; set; }
     public bool IsFinished => PercentDone >= 1.0;
 
     public string StatusText => Status switch

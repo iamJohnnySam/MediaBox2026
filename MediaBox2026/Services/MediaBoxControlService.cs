@@ -21,6 +21,7 @@ public class MediaBoxControlService(
 	TransmissionClient transmission,
 	MediaBoxState state,
 	MediaDatabase db,
+	MediaBoxSettingsIo settingsIo,
 	IOptionsMonitor<MediaBoxSettings> settings,
 	ILogger<MediaBoxControlService> logger) : MediaBoxControl.MediaBoxControlBase
 {
@@ -252,12 +253,185 @@ public class MediaBoxControlService(
 	}
 
 	// Queries
-	public override Task<MediaBox.Control.Grpc.Status> GetStatus(Empty request, ServerCallContext context) => throw NotYet();
-	public override Task<DownloadList> GetDownloads(Empty request, ServerCallContext context) => throw NotYet();
-	public override Task<MediaList> GetLibrary(LibraryQuery request, ServerCallContext context) => throw NotYet();
-	public override Task<WatchlistItems> GetWatchlist(Empty request, ServerCallContext context) => throw NotYet();
-	public override Task<YouTubeSources> GetYouTubeSources(Empty request, ServerCallContext context) => throw NotYet();
-	public override Task<SettingsMap> GetSettings(Empty request, ServerCallContext context) => throw NotYet();
+
+	/// <summary>Mirrors the /status Telegram command: TV/movie/download counts + speed mode.</summary>
+	public override async Task<MediaBox.Control.Grpc.Status> GetStatus(Empty request, ServerCallContext context)
+	{
+		try
+		{
+			bool speedMode;
+			try
+			{
+				speedMode = await transmission.GetAltSpeedEnabledAsync(context.CancellationToken) ?? false;
+			}
+			catch (Exception ex)
+			{
+				logger.LogWarning(ex, "gRPC GetStatus: could not read Transmission speed mode");
+				speedMode = false;
+			}
+
+			var summary = $"TV Shows: {state.TvShowCount} | Movies: {state.MovieCount} | " +
+				$"Active Downloads: {state.ActiveDownloads} | Watchlist: {state.WatchlistCount} | " +
+				$"YouTube: {state.YouTubeCount}";
+
+			return new MediaBox.Control.Grpc.Status
+			{
+				TvShows = state.TvShowCount,
+				Movies = state.MovieCount,
+				ActiveDownloads = state.ActiveDownloads,
+				SpeedMode = speedMode,
+				Summary = summary
+			};
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC GetStatus query failed");
+			return new MediaBox.Control.Grpc.Status();
+		}
+	}
+
+	/// <summary>Mirrors the /downloads Telegram command (TransmissionClient.GetTorrentsAsync).</summary>
+	public override async Task<DownloadList> GetDownloads(Empty request, ServerCallContext context)
+	{
+		var result = new DownloadList();
+		try
+		{
+			var torrents = await transmission.GetTorrentsAsync(context.CancellationToken);
+			foreach (var tor in torrents)
+			{
+				result.Items.Add(new DownloadItem
+				{
+					Name = tor.Name,
+					Percent = tor.PercentDone,
+					Status = tor.StatusText,
+					SizeBytes = tor.TotalSize,
+					RateDown = tor.RateDownload
+				});
+			}
+			return result;
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC GetDownloads query failed");
+			return new DownloadList();
+		}
+	}
+
+	/// <summary>Mirrors the library views: TV shows or movies (by query.type) from MediaDatabase.</summary>
+	public override Task<MediaList> GetLibrary(LibraryQuery request, ServerCallContext context)
+	{
+		var result = new MediaList();
+		try
+		{
+			var type = request.Type?.Trim().ToLowerInvariant() ?? "";
+			if (type == "tv")
+			{
+				foreach (var show in db.TvShows.FindAll())
+				{
+					result.Items.Add(new MediaItem
+					{
+						Name = show.Name,
+						Year = show.Year?.ToString() ?? "",
+						Seasons = show.LatestSeason,
+						Path = show.FolderPath
+					});
+				}
+			}
+			else if (type == "movies")
+			{
+				foreach (var movie in db.Movies.FindAll())
+				{
+					result.Items.Add(new MediaItem
+					{
+						Name = movie.Name,
+						Year = movie.Year?.ToString() ?? "",
+						Seasons = 0,
+						Path = movie.FolderPath
+					});
+				}
+			}
+			else
+			{
+				logger.LogWarning("gRPC GetLibrary: unrecognized type \"{Type}\" (expected \"tv\" or \"movies\")", request.Type);
+			}
+			return Task.FromResult(result);
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC GetLibrary query failed");
+			return Task.FromResult(new MediaList());
+		}
+	}
+
+	/// <summary>Mirrors the /watchlist Telegram command (Pending + AwaitingConfirmation items).</summary>
+	public override Task<WatchlistItems> GetWatchlist(Empty request, ServerCallContext context)
+	{
+		var result = new WatchlistItems();
+		try
+		{
+			var items = db.Watchlist.FindAll()
+				.Where(w => w.Status is WatchlistStatus.Pending or WatchlistStatus.AwaitingConfirmation)
+				.ToList();
+
+			foreach (var item in items)
+			{
+				result.Items.Add(new MediaBox.Control.Grpc.WatchlistItem
+				{
+					Name = item.Year.HasValue ? $"{item.Name} ({item.Year})" : item.Name,
+					Status = item.Status.ToString(),
+					Quality = item.Quality ?? ""
+				});
+			}
+			return Task.FromResult(result);
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC GetWatchlist query failed");
+			return Task.FromResult(new WatchlistItems());
+		}
+	}
+
+	/// <summary>Mirrors the /youtube listing: configured news sources + their paused state (persistent or temporary).</summary>
+	public override Task<YouTubeSources> GetYouTubeSources(Empty request, ServerCallContext context)
+	{
+		var result = new YouTubeSources();
+		try
+		{
+			foreach (var src in settings.CurrentValue.NewsSources)
+			{
+				var paused = src.Paused || state.IsSourceTemporarilyPaused(src.MatchTitle);
+				result.Items.Add(new YouTubeSource
+				{
+					Title = src.MatchTitle,
+					Url = src.Url,
+					Paused = paused
+				});
+			}
+			return Task.FromResult(result);
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC GetYouTubeSources query failed");
+			return Task.FromResult(new YouTubeSources());
+		}
+	}
+
+	/// <summary>Returns the editable settings (MediaBoxSettingsIo.Read) as a SettingsMap.</summary>
+	public override Task<SettingsMap> GetSettings(Empty request, ServerCallContext context)
+	{
+		var result = new SettingsMap();
+		try
+		{
+			foreach (var (key, value) in settingsIo.Read())
+				result.Values[key] = value;
+			return Task.FromResult(result);
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC GetSettings query failed");
+			return Task.FromResult(new SettingsMap());
+		}
+	}
 
 	// Mutations
 	public override Task<RunResult> AddWatchlist(TitleArg request, ServerCallContext context) => throw NotYet();
