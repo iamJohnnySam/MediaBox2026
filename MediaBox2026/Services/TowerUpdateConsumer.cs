@@ -26,6 +26,7 @@ namespace MediaBox2026.Services;
 public class TowerUpdateConsumer(
     ITelegramDispatcher dispatcher,
     TelegramAuthStore authStore,
+    MediaBoxState state,
     IOptionsMonitor<MediaBoxSettings> settings,
     ILogger<TowerUpdateConsumer> logger) : BackgroundService
 {
@@ -49,6 +50,14 @@ public class TowerUpdateConsumer(
 
         var url = settings.CurrentValue.TowerGrpcUrl;
         logger.LogInformation("TowerUpdateConsumer: starting. Connecting to Tower at {Url}", url);
+
+        // In gRPC mode the local TelegramBotService poll loop (which normally signals
+        // Telegram readiness) does NOT run, so the dependent scanner/monitor services
+        // would block forever on WaitForTelegramReadyAsync. Signal readiness here so they
+        // start — independent of whether Tower is currently reachable (notifications are
+        // best-effort via the gRPC notifier, which never throws).
+        state.SignalTelegramReady();
+        logger.LogInformation("TowerUpdateConsumer: signalled Telegram readiness (gRPC mode).");
 
         using var channel = GrpcChannel.ForAddress(url);
         var client = new TowerTelegram.TowerTelegramClient(channel);
