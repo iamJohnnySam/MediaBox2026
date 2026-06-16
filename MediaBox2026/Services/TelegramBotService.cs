@@ -46,8 +46,15 @@ public class TelegramBotService(
     TelegramAuthStore authStore,
     MediaBoxState state,
     IOptionsMonitor<MediaBoxSettings> settings,
-    ILogger<TelegramBotService> logger) : BackgroundService, ITelegramNotifier
+    ILogger<TelegramBotService> logger,
+    TowerTelegramNotifier? towerSender = null) : BackgroundService, ITelegramNotifier, ITelegramDispatcher
 {
+    // When UseTowerTelegram is on, per-chat command/callback REPLIES must route through
+    // Tower's gRPC rather than MediaBox's own HTTP client (which would conflict with Tower's
+    // ownership of the bot connection). towerSender is only registered in DI when the flag is on;
+    // when off it resolves to null and every send primitive takes its existing HTTP path.
+    private readonly TowerTelegramNotifier? _towerSender = towerSender;
+    private bool UseTower => settings.CurrentValue.UseTowerTelegram;
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -85,6 +92,13 @@ public class TelegramBotService(
     {
         var chatId = authStore.GetAdminChatId();
         if (chatId == null) return;
+
+        if (UseTower && _towerSender != null)
+        {
+            // Original HTTP path sets no parse_mode → pass "" so gRPC carries empty (not Markdown).
+            await _towerSender.SendPhotoToChatAsync(chatId.Value, photoUrl, caption, buttons, parseMode: "", ct);
+            return;
+        }
 
         var payload = new Dictionary<string, object>
         {
@@ -161,6 +175,12 @@ public class TelegramBotService(
             return null;
         }
 
+        if (UseTower && _towerSender != null)
+        {
+            // Original HTTP path sets no parse_mode → pass "" so gRPC carries empty (not Markdown).
+            return await _towerSender.SendKeyboardToChatAsync(chatId.Value, text, buttons, parseMode: "", ct);
+        }
+
         logger.LogInformation("Preparing to send Telegram inline keyboard to chat {ChatId}. Full text: '{Text}'", chatId.Value, text);
 
         var keyboard = buttons.Select(row =>
@@ -193,6 +213,13 @@ public class TelegramBotService(
         if (chatId == null)
         {
             logger.LogError("❌ Cannot edit Telegram message: Admin chat ID is null.");
+            return;
+        }
+
+        if (UseTower && _towerSender != null)
+        {
+            // Original HTTP path sets no parse_mode and no buttons → pass "" / null.
+            await _towerSender.EditInChatAsync(chatId.Value, messageId, newText, buttons: null, parseMode: "", ct);
             return;
         }
 
@@ -400,7 +427,7 @@ public class TelegramBotService(
             "   (debug, errors, all controls)", ct, parseMode: "Markdown");
     }
 
-    private async Task HandleCommandAsync(long chatId, string text, CancellationToken ct)
+    public async Task HandleCommandAsync(long chatId, string text, CancellationToken ct)
     {
         var parts = text.Split(' ', 2);
         var command = parts[0].ToLowerInvariant();
@@ -900,18 +927,35 @@ public class TelegramBotService(
     {
         var callbackId = cbq.GetProperty("id").GetString() ?? "";
         var data = cbq.TryGetProperty("data", out var d) ? d.GetString() ?? "" : "";
+        var chatId = cbq.TryGetProperty("message", out var msg)
+            ? msg.GetProperty("chat").GetProperty("id").GetInt64()
+            : 0L;
+        var messageId = cbq.TryGetProperty("message", out var msg2)
+            && msg2.TryGetProperty("message_id", out var mid)
+            ? mid.GetInt32() : 0;
 
-        // Answer the callback query to remove the "loading" state in Telegram
+        // Answer the callback query to remove the "loading" state in Telegram.
+        // This MUST happen here in the local-poll path; in the gRPC path TowerUpdateConsumer
+        // answers via client.AnswerCallbackAsync before calling HandleCallbackAsync.
         var ackPayload = new Dictionary<string, object>
         {
             ["callback_query_id"] = callbackId
         };
         await PostAsync("answerCallbackQuery", JsonSerializer.Serialize(ackPayload, JsonOpts), ct);
 
+        // Delegate to the shared dispatch method (also reachable via ITelegramDispatcher).
+        await HandleCallbackAsync(chatId, callbackId, data, messageId, ct);
+    }
+
+    /// <summary>
+    /// Dispatch logic for a callback_query after the callback has already been acknowledged
+    /// by the caller. Implements ITelegramDispatcher.HandleCallbackAsync.
+    /// </summary>
+    public async Task HandleCallbackAsync(long chatId, string callbackId, string data, int messageId, CancellationToken ct)
+    {
         // Movie search callbacks
         if (data.StartsWith("ms:"))
         {
-            var chatId = cbq.GetProperty("message").GetProperty("chat").GetProperty("id").GetInt64();
             var action = data[3..];
             await HandleMovieSessionCallbackAsync(chatId, action, ct);
             return;
@@ -932,6 +976,12 @@ public class TelegramBotService(
 
     private async Task SendToChatAsync(long chatId, string text, CancellationToken ct, string? parseMode = null)
     {
+        if (UseTower && _towerSender != null)
+        {
+            await _towerSender.SendToChatAsync(chatId, text, parseMode, ct);
+            return;
+        }
+
         var payload = new Dictionary<string, object>
         {
             ["chat_id"] = chatId,
@@ -1226,6 +1276,13 @@ public class TelegramBotService(
 
     private async Task SendPhotoToChatAsync(long chatId, string photoUrl, string caption, List<List<InlineButton>> buttons, CancellationToken ct)
     {
+        if (UseTower && _towerSender != null)
+        {
+            // Original HTTP path sets no parse_mode → pass "" so gRPC carries empty (not Markdown).
+            await _towerSender.SendPhotoToChatAsync(chatId, photoUrl, caption, buttons, parseMode: "", ct);
+            return;
+        }
+
         var keyboard = buttons.Select(row =>
             row.Select(b => new { text = b.Text, callback_data = b.CallbackData }).ToArray()
         ).ToArray();
@@ -1243,6 +1300,13 @@ public class TelegramBotService(
 
     private async Task SendInlineKeyboardToChatAsync(long chatId, string text, List<List<InlineButton>> buttons, CancellationToken ct)
     {
+        if (UseTower && _towerSender != null)
+        {
+            // Original HTTP path sets no parse_mode → pass "" so gRPC carries empty (not Markdown).
+            await _towerSender.SendKeyboardToChatAsync(chatId, text, buttons, parseMode: "", ct);
+            return;
+        }
+
         var keyboard = buttons.Select(row =>
             row.Select(b => new { text = b.Text, callback_data = b.CallbackData }).ToArray()
         ).ToArray();
