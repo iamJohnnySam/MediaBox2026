@@ -321,9 +321,10 @@ public class YouTubeDownloadService(
             }
 
             logger.LogInformation("🎬 Manual YouTube download triggered for {Count} source(s)", sources.Count);
-            await telegram.SendMessageAsync($"🎬 Starting manual YouTube downloads for {sources.Count} source(s)...", ct);
 
             int successCount = 0;
+            int skippedCount = 0;
+            int failCount = 0;
             for (int i = 0; i < sources.Count; i++)
             {
                 var source = sources[i];
@@ -331,7 +332,7 @@ public class YouTubeDownloadService(
                 if (source.Paused || state.IsSourceTemporarilyPaused(source.MatchTitle))
                 {
                     logger.LogInformation("⏭️ Skipping paused source [{Current}/{Total}]: {Title}", i + 1, sources.Count, source.MatchTitle);
-                    await telegram.SendMessageAsync($"⏭️ Skipped (paused): {source.MatchTitle}", ct);
+                    skippedCount++;
                     continue;
                 }
 
@@ -346,6 +347,7 @@ public class YouTubeDownloadService(
                 {
                     logger.LogError(ex, "❌ Failed to download: {Title}", source.MatchTitle);
                     await telegram.SendMessageAsync($"❌ Failed to download: {source.MatchTitle}", ct);
+                    failCount++;
                 }
 
                 // Delay between downloads to avoid rate limiting (especially for same channel)
@@ -356,8 +358,17 @@ public class YouTubeDownloadService(
                 }
             }
 
-            logger.LogInformation("✅ Manual YouTube download complete: {Success}/{Total} successful", successCount, sources.Count);
-            await telegram.SendMessageAsync($"✅ Manual YouTube download complete: {successCount}/{sources.Count} successful", ct);
+            logger.LogInformation("✅ Manual YouTube download complete: {Success}/{Total} successful, {Skipped} skipped", successCount, sources.Count, skippedCount);
+
+            // Only notify if there was meaningful activity — don't spam when all sources are paused
+            if (successCount > 0 || failCount > 0)
+            {
+                var parts = new List<string>();
+                if (successCount > 0) parts.Add($"{successCount} downloaded");
+                if (failCount > 0) parts.Add($"{failCount} failed");
+                if (skippedCount > 0) parts.Add($"{skippedCount} paused");
+                await telegram.SendMessageAsync($"✅ YouTube done: {string.Join(", ", parts)}", ct);
+            }
 
             return successCount;
         }
