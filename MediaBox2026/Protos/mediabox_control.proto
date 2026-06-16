@@ -13,6 +13,7 @@ service MediaBoxControl {
   rpc YouTubeResume(TitleArg) returns (RunResult);
   rpc ResetQuality(Empty) returns (RunResult);
   rpc ToggleSpeedMode(Empty) returns (RunResult);
+  rpc WatchlistCheck(Empty) returns (RunResult);
   // Queries
   rpc GetStatus(Empty) returns (Status);
   rpc GetDownloads(Empty) returns (DownloadList);

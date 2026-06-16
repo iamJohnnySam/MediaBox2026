@@ -20,6 +20,7 @@ public class MediaBoxControlService(
 	TransmissionMonitorService transmissionMonitor,
 	YouTubeDownloadService youtubeDownload,
 	TransmissionClient transmission,
+	MovieWatchlistService watchlist,
 	MediaBoxState state,
 	MediaDatabase db,
 	MediaBoxSettingsIo settingsIo,
@@ -249,6 +250,21 @@ public class MediaBoxControlService(
 		catch (Exception ex)
 		{
 			logger.LogError(ex, "gRPC ToggleSpeedMode trigger failed");
+			return new RunResult { Ok = false, Message = ex.Message };
+		}
+	}
+
+	/// <summary>Mirrors MovieWatchlistService's per-cycle work (WatchlistCheck -> RunOnceAsync).</summary>
+	public override async Task<RunResult> WatchlistCheck(Empty request, ServerCallContext context)
+	{
+		try
+		{
+			await watchlist.RunOnceAsync(context.CancellationToken);
+			return new RunResult { Ok = true, Message = "Watchlist check complete" };
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC WatchlistCheck trigger failed");
 			return new RunResult { Ok = false, Message = ex.Message };
 		}
 	}
