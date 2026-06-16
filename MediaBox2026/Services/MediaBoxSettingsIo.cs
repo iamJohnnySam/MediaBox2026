@@ -156,7 +156,7 @@ public class MediaBoxSettingsIo(
 	/// <summary>
 	/// Parses a flat string value to the correct JSON type for the given known key and writes
 	/// "key: value". Returns false (writing nothing) if the value can't be parsed for keys with a
-	/// strict expected shape (currently only NewsSources) so the caller can keep the prior value
+	/// strict expected shape (the int keys and NewsSources) so the caller can keep the prior value
 	/// instead of overwriting it with a default/empty fallback.
 	/// </summary>
 	private static bool TryWriteKnownValue(Utf8JsonWriter writer, string key, string rawValue)
@@ -166,7 +166,8 @@ public class MediaBoxSettingsIo(
 			case "RssFeedCheckMinutes":
 			case "TransmissionCheckMinutes":
 			case "QualityWaitHours":
-				writer.WriteNumber(key, int.TryParse(rawValue, out var n) ? n : 0);
+				if (!int.TryParse(rawValue, out var n)) return false;
+				writer.WriteNumber(key, n);
 				return true;
 
 			case "YouTubeDownloadPaused":
