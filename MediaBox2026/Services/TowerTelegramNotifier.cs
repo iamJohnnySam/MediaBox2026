@@ -67,6 +67,100 @@ public class TowerTelegramNotifier : ITelegramNotifier
         }
     }
 
+    // ── per-chat helpers (NOT part of ITelegramNotifier) ─────────────────────
+    // Used by TelegramBotService's internal send primitives when UseTowerTelegram
+    // is on, so that command/callback/movie-session REPLIES route through Tower
+    // instead of MediaBox's own HTTP client. All never-throw.
+
+    /// <summary>Send a plain text message to an arbitrary chat. Returns message id or null.</summary>
+    public async Task<int?> SendToChatAsync(long chatId, string text, string? parseMode, CancellationToken ct)
+    {
+        try
+        {
+            var req = new SendMessageRequest
+            {
+                Audience = Audience.Chat,
+                ChatId = chatId,
+                Text = text,
+                ParseMode = parseMode ?? ""
+            };
+            var result = await GetClient().SendMessageAsync(req, cancellationToken: ct);
+            return result.Ok ? result.MessageId : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "TowerTelegramNotifier: gRPC SendToChat failed (Tower may be offline). ChatId={ChatId}", chatId);
+            return null;
+        }
+    }
+
+    /// <summary>Send an inline-keyboard message to an arbitrary chat. Returns message id or null.</summary>
+    public async Task<int?> SendKeyboardToChatAsync(long chatId, string text, List<List<InlineButton>> buttons, string? parseMode, CancellationToken ct)
+    {
+        try
+        {
+            var req = new InlineKeyboardRequest
+            {
+                ChatId = chatId,
+                Text = text,
+                ParseMode = parseMode ?? "Markdown"
+            };
+            req.Buttons.AddRange(ToButtonRows(buttons));
+            var result = await GetClient().SendInlineKeyboardAsync(req, cancellationToken: ct);
+            return result.Ok ? result.MessageId : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "TowerTelegramNotifier: gRPC SendKeyboardToChat failed (Tower may be offline). ChatId={ChatId}", chatId);
+            return null;
+        }
+    }
+
+    /// <summary>Send a photo (optionally with buttons) to an arbitrary chat. Returns message id or null.</summary>
+    public async Task<int?> SendPhotoToChatAsync(long chatId, string photoUrl, string caption, List<List<InlineButton>>? buttons, string? parseMode, CancellationToken ct)
+    {
+        try
+        {
+            var req = new SendPhotoRequest
+            {
+                Audience = Audience.Chat,
+                ChatId = chatId,
+                PhotoUrl = photoUrl,
+                Caption = caption,
+                ParseMode = parseMode ?? "Markdown"
+            };
+            req.Buttons.AddRange(ToButtonRows(buttons));
+            var result = await GetClient().SendPhotoAsync(req, cancellationToken: ct);
+            return result.Ok ? result.MessageId : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "TowerTelegramNotifier: gRPC SendPhotoToChat failed (Tower may be offline). ChatId={ChatId}", chatId);
+            return null;
+        }
+    }
+
+    /// <summary>Edit an existing message in an arbitrary chat.</summary>
+    public async Task EditInChatAsync(long chatId, int messageId, string text, List<List<InlineButton>>? buttons, string? parseMode, CancellationToken ct)
+    {
+        try
+        {
+            var req = new EditMessageRequest
+            {
+                ChatId = chatId,
+                MessageId = messageId,
+                Text = text,
+                ParseMode = parseMode ?? ""
+            };
+            req.Buttons.AddRange(ToButtonRows(buttons));
+            await GetClient().EditMessageAsync(req, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "TowerTelegramNotifier: gRPC EditInChat failed (Tower may be offline). ChatId={ChatId} MessageId={MessageId}", chatId, messageId);
+        }
+    }
+
     // ── ITelegramNotifier implementation ─────────────────────────────────────
 
     /// <summary>

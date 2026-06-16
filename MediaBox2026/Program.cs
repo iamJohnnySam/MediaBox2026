@@ -91,10 +91,43 @@ builder.Services.AddSingleton<JellyfinClient>();
 builder.Services.AddSingleton<MediaCatalogService>();
 builder.Services.AddHttpClient();
 
-// Telegram bot (singleton + hosted service + ITelegramNotifier)
-builder.Services.AddSingleton<TelegramBotService>();
-builder.Services.AddSingleton<ITelegramNotifier>(sp => sp.GetRequiredService<TelegramBotService>());
-builder.Services.AddHostedService(sp => sp.GetRequiredService<TelegramBotService>());
+// Telegram bot wiring — gated on the UseTowerTelegram flag.
+//   OFF (default): today's local bot — TelegramBotService is the notifier AND the hosted
+//                  long-poll service. towerSender resolves to null (TowerTelegramNotifier
+//                  is not registered → GetService returns null), so every send primitive
+//                  takes its existing HTTP path. Byte-for-byte unchanged.
+//   ON: outbound notifications + per-chat replies route through Tower's gRPC.
+//       TowerTelegramNotifier is the ITelegramNotifier; TowerUpdateConsumer streams inbound
+//       updates. TelegramBotService is still constructed (as the dispatcher and for its
+//       towerSender-routed primitives) but is NOT a hosted service (no local polling).
+var useTowerTelegram = builder.Configuration.GetSection("MediaBox").GetValue<bool>("UseTowerTelegram");
+
+// TelegramBotService is registered via a factory so its optional towerSender param resolves
+// cleanly to null on the OFF path (TowerTelegramNotifier unregistered) without DI errors.
+builder.Services.AddSingleton<TelegramBotService>(sp => new TelegramBotService(
+    sp.GetRequiredService<MediaDatabase>(),
+    sp,
+    sp.GetRequiredService<TransmissionClient>(),
+    sp.GetRequiredService<TelegramAuthStore>(),
+    sp.GetRequiredService<MediaBoxState>(),
+    sp.GetRequiredService<IOptionsMonitor<MediaBoxSettings>>(),
+    sp.GetRequiredService<ILogger<TelegramBotService>>(),
+    sp.GetService<TowerTelegramNotifier>()));
+builder.Services.AddSingleton<ITelegramDispatcher>(sp => sp.GetRequiredService<TelegramBotService>());
+
+if (useTowerTelegram)
+{
+    builder.Services.AddSingleton<TowerTelegramNotifier>();
+    builder.Services.AddSingleton<ITelegramNotifier>(sp => sp.GetRequiredService<TowerTelegramNotifier>());
+    builder.Services.AddHostedService<TowerUpdateConsumer>();
+    // No AddHostedService for TelegramBotService — no local polling when Tower owns the bot.
+}
+else
+{
+    // Exactly today's wiring.
+    builder.Services.AddSingleton<ITelegramNotifier>(sp => sp.GetRequiredService<TelegramBotService>());
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<TelegramBotService>());
+}
 
 // RSS Feed Monitor (singleton + hosted service for manual triggering)
 builder.Services.AddSingleton<RssFeedMonitorService>();
