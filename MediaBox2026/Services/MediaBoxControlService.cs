@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Grpc.Core;
 using MediaBox.Control.Grpc;
 using MediaBox2026.Models;
@@ -434,8 +435,143 @@ public class MediaBoxControlService(
 	}
 
 	// Mutations
-	public override Task<RunResult> AddWatchlist(TitleArg request, ServerCallContext context) => throw NotYet();
-	public override Task<RunResult> RemoveWatchlist(TitleArg request, ServerCallContext context) => throw NotYet();
-	public override Task<RunResult> SearchAndAddMovie(TitleArg request, ServerCallContext context) => throw NotYet();
-	public override Task<RunResult> UpdateSettings(SettingsMap request, ServerCallContext context) => throw NotYet();
+
+	/// <summary>Mirrors the /add Telegram command: quick-add a title to the watchlist by name (no search).</summary>
+	public override Task<RunResult> AddWatchlist(TitleArg request, ServerCallContext context)
+	{
+		try
+		{
+			var arg = request.Title?.Trim() ?? "";
+			if (string.IsNullOrWhiteSpace(arg))
+				return Task.FromResult(new RunResult { Ok = false, Message = "Usage: title required." });
+
+			var parsed = FileNameParser.Parse(arg);
+			db.Watchlist.Insert(new MediaBox2026.Models.WatchlistItem
+			{
+				Name = parsed.CleanName.Length > 0 ? parsed.CleanName : arg,
+				Year = parsed.Year,
+				Status = WatchlistStatus.Pending,
+				AddedDate = DateTime.UtcNow
+			});
+			state.WatchlistCount = db.Watchlist.Count(w => w.Status == WatchlistStatus.Pending);
+			state.AddActivity($"Added to watchlist: {arg}");
+			logger.LogInformation("gRPC AddWatchlist: added \"{Title}\"", arg);
+			return Task.FromResult(new RunResult { Ok = true, Message = $"Added to watchlist: {arg}" });
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC AddWatchlist mutation failed");
+			return Task.FromResult(new RunResult { Ok = false, Message = ex.Message });
+		}
+	}
+
+	/// <summary>Mirrors the /remove Telegram command: cancel the first watchlist entry whose name contains the title.</summary>
+	public override Task<RunResult> RemoveWatchlist(TitleArg request, ServerCallContext context)
+	{
+		try
+		{
+			var arg = request.Title?.Trim() ?? "";
+			if (string.IsNullOrWhiteSpace(arg))
+				return Task.FromResult(new RunResult { Ok = false, Message = "Usage: title required." });
+
+			var toRemove = db.Watchlist.FindAll()
+				.FirstOrDefault(w => w.Name.Contains(arg, StringComparison.OrdinalIgnoreCase));
+			if (toRemove == null)
+				return Task.FromResult(new RunResult { Ok = false, Message = $"Not found in watchlist: {arg}" });
+
+			toRemove.Status = WatchlistStatus.Cancelled;
+			db.Watchlist.Update(toRemove);
+			state.WatchlistCount = db.Watchlist.Count(w => w.Status == WatchlistStatus.Pending);
+			logger.LogInformation("gRPC RemoveWatchlist: removed \"{Title}\"", toRemove.Name);
+			return Task.FromResult(new RunResult { Ok = true, Message = $"Removed from watchlist: {toRemove.Name}" });
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC RemoveWatchlist mutation failed");
+			return Task.FromResult(new RunResult { Ok = false, Message = ex.Message });
+		}
+	}
+
+	/// <summary>
+	/// Mirrors the /movie (/search) Telegram command's search step (YTS lookup), but bounded for
+	/// gRPC: the Telegram flow pages through results with inline Prev/Next/Add buttons and waits
+	/// for a callback; there is no equivalent interactive round-trip over a single RPC call. So
+	/// here we search, pick the best candidate (first/highest-rated result from YTS, matching
+	/// /movie's default sort_by=rating), add it to the watchlist immediately (same fields the
+	/// "✅ Add to Watchlist" button writes: Name/Year/ImdbCode/PosterUrl/TrailerCode/Pending), and
+	/// report what was added.
+	/// </summary>
+	public override async Task<RunResult> SearchAndAddMovie(TitleArg request, ServerCallContext context)
+	{
+		try
+		{
+			var query = request.Title?.Trim() ?? "";
+			if (string.IsNullOrWhiteSpace(query))
+				return new RunResult { Ok = false, Message = "Usage: title required." };
+
+			using var http = new HttpClient();
+			var url = $"https://yts.bz/api/v2/list_movies.json?query_term={Uri.EscapeDataString(query)}&limit=10&sort_by=rating";
+			var response = await http.GetAsync(url, context.CancellationToken);
+			if (!response.IsSuccessStatusCode)
+				return new RunResult { Ok = false, Message = "Movie search is temporarily unavailable. Please try again later." };
+
+			var jsonText = await response.Content.ReadAsStringAsync(context.CancellationToken);
+			using var doc = JsonDocument.Parse(jsonText);
+			var json = doc.RootElement;
+			if (!json.TryGetProperty("data", out var data) ||
+				!data.TryGetProperty("movies", out var movies) ||
+				movies.ValueKind != JsonValueKind.Array || movies.GetArrayLength() == 0)
+			{
+				return new RunResult { Ok = false, Message = $"No movies found for \"{query}\". Try a different search term." };
+			}
+
+			// Best/top match: first result, mirroring the Telegram flow's initial (sort_by=rating) page.
+			var best = movies[0];
+			var title = best.GetProperty("title").GetString() ?? query;
+			var year = best.GetProperty("year").GetInt32();
+			var imdbCode = best.TryGetProperty("imdb_code", out var ic) ? ic.GetString() : null;
+			var posterUrl = best.TryGetProperty("medium_cover_image", out var p) ? p.GetString() : null;
+			var trailerCode = best.TryGetProperty("yt_trailer_code", out var tr) ? tr.GetString() : null;
+
+			db.Watchlist.Insert(new MediaBox2026.Models.WatchlistItem
+			{
+				Name = title,
+				Year = year,
+				ImdbCode = imdbCode,
+				PosterUrl = posterUrl,
+				TrailerCode = trailerCode,
+				Status = WatchlistStatus.Pending,
+				AddedDate = DateTime.UtcNow
+			});
+			state.WatchlistCount = db.Watchlist.Count(w => w.Status == WatchlistStatus.Pending);
+			state.AddActivity($"Added to watchlist: {title} ({year})");
+			state.NotifyChange();
+			logger.LogInformation("gRPC SearchAndAddMovie: matched \"{Query}\" -> \"{Title}\" ({Year}), added to watchlist", query, title, year);
+
+			return new RunResult { Ok = true, Message = $"Added \"{title} ({year})\" to watchlist." };
+		}
+		catch (Exception ex)
+		{
+			logger.LogWarning(ex, "gRPC SearchAndAddMovie mutation failed");
+			return new RunResult { Ok = false, Message = ex.Message };
+		}
+	}
+
+	/// <summary>Persists non-sensitive settings changes (MediaBoxSettingsIo.Write) -- mirrors the appsettings.json half of Settings.razor's SaveSettings.</summary>
+	public override Task<RunResult> UpdateSettings(SettingsMap request, ServerCallContext context)
+	{
+		try
+		{
+			var values = new Dictionary<string, string>(request.Values);
+			var ok = settingsIo.Write(values);
+			return Task.FromResult(ok
+				? new RunResult { Ok = true, Message = $"Settings updated ({values.Count} value(s))." }
+				: new RunResult { Ok = false, Message = "Failed to write settings. Check server logs." });
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC UpdateSettings mutation failed");
+			return Task.FromResult(new RunResult { Ok = false, Message = ex.Message });
+		}
+	}
 }
