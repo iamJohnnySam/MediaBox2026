@@ -46,7 +46,7 @@ public class TelegramBotService(
     TelegramAuthStore authStore,
     MediaBoxState state,
     IOptionsMonitor<MediaBoxSettings> settings,
-    ILogger<TelegramBotService> logger) : BackgroundService, ITelegramNotifier
+    ILogger<TelegramBotService> logger) : BackgroundService, ITelegramNotifier, ITelegramDispatcher
 {
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -400,7 +400,7 @@ public class TelegramBotService(
             "   (debug, errors, all controls)", ct, parseMode: "Markdown");
     }
 
-    private async Task HandleCommandAsync(long chatId, string text, CancellationToken ct)
+    public async Task HandleCommandAsync(long chatId, string text, CancellationToken ct)
     {
         var parts = text.Split(' ', 2);
         var command = parts[0].ToLowerInvariant();
@@ -900,18 +900,35 @@ public class TelegramBotService(
     {
         var callbackId = cbq.GetProperty("id").GetString() ?? "";
         var data = cbq.TryGetProperty("data", out var d) ? d.GetString() ?? "" : "";
+        var chatId = cbq.TryGetProperty("message", out var msg)
+            ? msg.GetProperty("chat").GetProperty("id").GetInt64()
+            : 0L;
+        var messageId = cbq.TryGetProperty("message", out var msg2)
+            && msg2.TryGetProperty("message_id", out var mid)
+            ? mid.GetInt32() : 0;
 
-        // Answer the callback query to remove the "loading" state in Telegram
+        // Answer the callback query to remove the "loading" state in Telegram.
+        // This MUST happen here in the local-poll path; in the gRPC path TowerUpdateConsumer
+        // answers via client.AnswerCallbackAsync before calling HandleCallbackAsync.
         var ackPayload = new Dictionary<string, object>
         {
             ["callback_query_id"] = callbackId
         };
         await PostAsync("answerCallbackQuery", JsonSerializer.Serialize(ackPayload, JsonOpts), ct);
 
+        // Delegate to the shared dispatch method (also reachable via ITelegramDispatcher).
+        await HandleCallbackAsync(chatId, callbackId, data, messageId, ct);
+    }
+
+    /// <summary>
+    /// Dispatch logic for a callback_query after the callback has already been acknowledged
+    /// by the caller. Implements ITelegramDispatcher.HandleCallbackAsync.
+    /// </summary>
+    public async Task HandleCallbackAsync(long chatId, string callbackId, string data, int messageId, CancellationToken ct)
+    {
         // Movie search callbacks
         if (data.StartsWith("ms:"))
         {
-            var chatId = cbq.GetProperty("message").GetProperty("chat").GetProperty("id").GetInt64();
             var action = data[3..];
             await HandleMovieSessionCallbackAsync(chatId, action, ct);
             return;
