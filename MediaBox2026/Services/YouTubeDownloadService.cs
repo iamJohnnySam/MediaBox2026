@@ -45,59 +45,7 @@ public class YouTubeDownloadService(
         {
             try
             {
-                var config = settings.CurrentValue;
-
-                if (state.YouTubeTemporarilyPaused)
-                {
-                    logger.LogInformation("⏸️ YouTube downloads temporarily paused via Telegram. Sleeping 5 minutes.");
-                    await Task.Delay(TimeSpan.FromMinutes(5), ct);
-                    continue;
-                }
-
-                if (config.YouTubeDownloadPaused)
-                {
-                    logger.LogInformation("⏸️ YouTube downloads disabled in settings (YouTubeDownloadPaused=true). Sleeping 1 hour.");
-                    await Task.Delay(TimeSpan.FromHours(1), ct);
-                    continue;
-                }
-
-                var sources = config.NewsSources;
-                if (sources.Count == 0)
-                {
-                    logger.LogWarning("No news sources configured, sleeping 1 hour");
-                    await Task.Delay(TimeSpan.FromHours(1), ct);
-                    continue;
-                }
-
-                var next = GetNextScheduled(sources);
-                if (next is null)
-                {
-                    logger.LogInformation("⏸️ All YouTube sources are paused. Sleeping 5 minutes.");
-                    await Task.Delay(TimeSpan.FromMinutes(5), ct);
-                    continue;
-                }
-
-                var (nextSource, delay) = next.Value;
-                logger.LogInformation("Next YouTube download: \"{Title}\" at {Time} (in {Delay})",
-                    nextSource.MatchTitle, DateTime.Now.Add(delay).ToString("HH:mm"), delay);
-                await Task.Delay(delay, ct);
-
-                if (state.YouTubeTemporarilyPaused || settings.CurrentValue.YouTubeDownloadPaused)
-                {
-                    logger.LogInformation("⏸️ YouTube downloads paused — skipping scheduled download for \"{Title}\"", nextSource.MatchTitle);
-                    continue;
-                }
-
-                // Re-check per-source pause after the long delay
-                var currentSource = settings.CurrentValue.NewsSources
-                    .FirstOrDefault(s => s.MatchTitle == nextSource.MatchTitle);
-                if (currentSource?.Paused == true || state.IsSourceTemporarilyPaused(nextSource.MatchTitle))
-                {
-                    logger.LogInformation("⏸️ Source paused after delay — skipping: \"{Title}\"", nextSource.MatchTitle);
-                    continue;
-                }
-
-                await DownloadNewsAsync(nextSource, ct);
+                await RunOnceAsync(ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception ex)
@@ -106,6 +54,70 @@ public class YouTubeDownloadService(
                 await Task.Delay(TimeSpan.FromMinutes(30), ct);
             }
         }
+    }
+
+    /// <summary>
+    /// Runs one scheduling cycle: checks pause state, determines the next due source (sleeping
+    /// until it's due), re-checks pause state, and downloads it. This is the per-cycle work that
+    /// ExecuteAsync's loop runs continuously; it's a PURE extraction of that loop body (including
+    /// its own internal scheduling sleeps, which are this service's wait-for-next-source logic,
+    /// not a generic outer interval delay — there is no separate trailing delay in this service).
+    /// </summary>
+    public async Task RunOnceAsync(CancellationToken ct)
+    {
+        var config = settings.CurrentValue;
+
+        if (state.YouTubeTemporarilyPaused)
+        {
+            logger.LogInformation("⏸️ YouTube downloads temporarily paused via Telegram. Sleeping 5 minutes.");
+            await Task.Delay(TimeSpan.FromMinutes(5), ct);
+            return;
+        }
+
+        if (config.YouTubeDownloadPaused)
+        {
+            logger.LogInformation("⏸️ YouTube downloads disabled in settings (YouTubeDownloadPaused=true). Sleeping 1 hour.");
+            await Task.Delay(TimeSpan.FromHours(1), ct);
+            return;
+        }
+
+        var sources = config.NewsSources;
+        if (sources.Count == 0)
+        {
+            logger.LogWarning("No news sources configured, sleeping 1 hour");
+            await Task.Delay(TimeSpan.FromHours(1), ct);
+            return;
+        }
+
+        var next = GetNextScheduled(sources);
+        if (next is null)
+        {
+            logger.LogInformation("⏸️ All YouTube sources are paused. Sleeping 5 minutes.");
+            await Task.Delay(TimeSpan.FromMinutes(5), ct);
+            return;
+        }
+
+        var (nextSource, delay) = next.Value;
+        logger.LogInformation("Next YouTube download: \"{Title}\" at {Time} (in {Delay})",
+            nextSource.MatchTitle, DateTime.Now.Add(delay).ToString("HH:mm"), delay);
+        await Task.Delay(delay, ct);
+
+        if (state.YouTubeTemporarilyPaused || settings.CurrentValue.YouTubeDownloadPaused)
+        {
+            logger.LogInformation("⏸️ YouTube downloads paused — skipping scheduled download for \"{Title}\"", nextSource.MatchTitle);
+            return;
+        }
+
+        // Re-check per-source pause after the long delay
+        var currentSource = settings.CurrentValue.NewsSources
+            .FirstOrDefault(s => s.MatchTitle == nextSource.MatchTitle);
+        if (currentSource?.Paused == true || state.IsSourceTemporarilyPaused(nextSource.MatchTitle))
+        {
+            logger.LogInformation("⏸️ Source paused after delay — skipping: \"{Title}\"", nextSource.MatchTitle);
+            return;
+        }
+
+        await DownloadNewsAsync(nextSource, ct);
     }
 
     private (NewsSource Source, TimeSpan Delay)? GetNextScheduled(List<NewsSource> sources)

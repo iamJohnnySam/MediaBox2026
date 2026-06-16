@@ -39,18 +39,8 @@ public class DownloadOrganizerService(
         {
             try
             {
-                logger.LogInformation("=== Download Organizer Cycle Starting ===");
-                if (_consecutiveFailures > 0)
-                {
-                    logger.LogWarning("⚠️ Consecutive failures: {Count}/{Max}", _consecutiveFailures, MaxConsecutiveFailures);
-                }
-
-                var checkStart = DateTime.UtcNow;
-                await OrganizeAsync(ct);
+                await RunOnceAsync(ct);
                 _consecutiveFailures = 0; // Reset on success
-
-                var duration = DateTime.UtcNow - checkStart;
-                logger.LogInformation("✅ Download organizer cycle completed in {Duration:F1}s", duration.TotalSeconds);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -91,6 +81,25 @@ public class DownloadOrganizerService(
                 break;
             }
         }
+    }
+
+    /// <summary>
+    /// Runs one download organizer cycle. This is the per-cycle work that ExecuteAsync's loop
+    /// runs on a timer; it's also callable directly (e.g. via gRPC trigger).
+    /// </summary>
+    public async Task RunOnceAsync(CancellationToken ct)
+    {
+        logger.LogInformation("=== Download Organizer Cycle Starting ===");
+        if (_consecutiveFailures > 0)
+        {
+            logger.LogWarning("⚠️ Consecutive failures: {Count}/{Max}", _consecutiveFailures, MaxConsecutiveFailures);
+        }
+
+        var checkStart = DateTime.UtcNow;
+        await OrganizeAsync(ct);
+
+        var duration = DateTime.UtcNow - checkStart;
+        logger.LogInformation("✅ Download organizer cycle completed in {Duration:F1}s", duration.TotalSeconds);
     }
 
     private async Task OrganizeAsync(CancellationToken ct)

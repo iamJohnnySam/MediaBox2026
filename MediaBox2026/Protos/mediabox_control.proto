@@ -1,0 +1,44 @@
+syntax = "proto3";
+option csharp_namespace = "MediaBox.Control.Grpc";
+package mediabox.control;
+
+service MediaBoxControl {
+  // Triggers (run a unit of work once)
+  rpc Scan(Empty) returns (RunResult);
+  rpc Organize(Empty) returns (RunResult);
+  rpc RssCheck(Empty) returns (RunResult);
+  rpc TransmissionPoll(Empty) returns (RunResult);
+  rpc YouTubeDownload(Empty) returns (RunResult);
+  rpc YouTubePause(TitleArg) returns (RunResult);
+  rpc YouTubeResume(TitleArg) returns (RunResult);
+  rpc ResetQuality(Empty) returns (RunResult);
+  rpc ToggleSpeedMode(Empty) returns (RunResult);
+  rpc WatchlistCheck(Empty) returns (RunResult);
+  // Queries
+  rpc GetStatus(Empty) returns (Status);
+  rpc GetDownloads(Empty) returns (DownloadList);
+  rpc GetLibrary(LibraryQuery) returns (MediaList);
+  rpc GetWatchlist(Empty) returns (WatchlistItems);
+  rpc GetYouTubeSources(Empty) returns (YouTubeSources);
+  rpc GetSettings(Empty) returns (SettingsMap);
+  // Mutations
+  rpc AddWatchlist(TitleArg) returns (RunResult);
+  rpc RemoveWatchlist(TitleArg) returns (RunResult);
+  rpc SearchAndAddMovie(TitleArg) returns (RunResult);
+  rpc UpdateSettings(SettingsMap) returns (RunResult);
+}
+
+message Empty {}
+message TitleArg { string title = 1; }
+message LibraryQuery { string type = 1; }  // "tv" | "movies"
+message RunResult { bool ok = 1; string message = 2; }
+message Status { int32 tv_shows = 1; int32 movies = 2; int32 active_downloads = 3; bool speed_mode = 4; string summary = 5; }
+message DownloadItem { string name = 1; double percent = 2; string status = 3; int64 size_bytes = 4; double rate_down = 5; }
+message DownloadList { repeated DownloadItem items = 1; }
+message MediaItem { string name = 1; string year = 2; int32 seasons = 3; string path = 4; }
+message MediaList { repeated MediaItem items = 1; }
+message WatchlistItem { string name = 1; string status = 2; string quality = 3; }
+message WatchlistItems { repeated WatchlistItem items = 1; }
+message YouTubeSource { string title = 1; string url = 2; bool paused = 3; }
+message YouTubeSources { repeated YouTubeSource items = 1; }
+message SettingsMap { map<string,string> values = 1; }

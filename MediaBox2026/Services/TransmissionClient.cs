@@ -35,7 +35,7 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
     public async Task<List<TorrentInfo>> GetTorrentsAsync(CancellationToken ct = default)
     {
         var fields = new JsonArray();
-        foreach (var field in new[] { "id", "name", "status", "percentDone", "totalSize", "downloadDir", "addedDate" })
+        foreach (var field in new[] { "id", "name", "status", "percentDone", "totalSize", "downloadDir", "addedDate", "rateDownload" })
             fields.Add(JsonValue.Create(field));
 
         var request = new JsonObject
@@ -64,7 +64,8 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
                     PercentDone = t.GetProperty("percentDone").GetDouble(),
                     TotalSize = t.GetProperty("totalSize").GetInt64(),
                     DownloadDir = t.TryGetProperty("downloadDir", out var dd) ? dd.GetString() : null,
-                    DateAdded = t.TryGetProperty("addedDate", out var da) ? da.GetInt64() : 0
+                    DateAdded = t.TryGetProperty("addedDate", out var da) ? da.GetInt64() : 0,
+                    RateDownload = t.TryGetProperty("rateDownload", out var rd) ? rd.GetInt64() : 0
                 });
             }
         }

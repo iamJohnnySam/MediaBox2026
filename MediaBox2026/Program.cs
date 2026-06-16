@@ -1,14 +1,16 @@
-using MediaBox2026.Components;
 using MediaBox2026.Models;
 using MediaBox2026.Services;
-using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Options;
 using Serilog;
 using Serilog.Events;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.WebHost.UseUrls("http://0.0.0.0:5000");
+builder.WebHost.ConfigureKestrel(o =>
+{
+	o.ListenAnyIP(5000); // /health only (HTTP/1.1)
+	o.ListenAnyIP(5602, l => l.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http2); // gRPC h2c
+});
 
 // Load secrets file (gitignored) — overrides appsettings.json for sensitive values
 // Use AppContext.BaseDirectory so the file is found next to the binary regardless of CWD
@@ -42,7 +44,7 @@ Log.Logger = new LoggerConfiguration()
 
 builder.Host.UseSerilog();
 
-// In-memory log sink for Blazor log viewer
+// In-memory log sink (consumed by CrashReporter for recent-log context on crashes)
 var logSink = new InMemoryLogSink();
 builder.Services.AddSingleton(logSink);
 builder.Logging.AddProvider(new InMemoryLoggerProvider(logSink));
@@ -82,6 +84,9 @@ builder.Services.PostConfigure<MediaBoxSettings>(settings =>
 	}
 });
 
+// gRPC control server (MediaBoxControl) — Tower -> MediaBox channel on :5602
+builder.Services.AddGrpc();
+
 // Core services
 builder.Services.AddSingleton<MediaDatabase>();
 builder.Services.AddSingleton<MediaBoxState>();
@@ -89,6 +94,7 @@ builder.Services.AddSingleton<TelegramAuthStore>();
 builder.Services.AddSingleton<TransmissionClient>();
 builder.Services.AddSingleton<JellyfinClient>();
 builder.Services.AddSingleton<MediaCatalogService>();
+builder.Services.AddSingleton<MediaBoxSettingsIo>();
 builder.Services.AddHttpClient();
 
 // Telegram bot wiring — gated on the UseTowerTelegram flag.
@@ -129,19 +135,35 @@ else
     builder.Services.AddHostedService(sp => sp.GetRequiredService<TelegramBotService>());
 }
 
-// RSS Feed Monitor (singleton + hosted service for manual triggering)
-builder.Services.AddSingleton<RssFeedMonitorService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<RssFeedMonitorService>());
+// The 7 capability services are ALWAYS registered as singletons (so their RunOnceAsync is
+// resolvable/callable by the gRPC triggers), but are only registered as hosted services
+// (i.e. self-scheduling via their own BackgroundService timer loop) when SelfSchedule is on.
+//   ON  (today's behavior): hosted + self-scheduling, exactly as before.
+//   OFF (default): singletons only — no timer loops; Tower drives them via gRPC instead.
+var selfSchedule = builder.Configuration.GetSection("MediaBox").GetValue<bool>("SelfSchedule");
 
-// YouTube Download Service (singleton + hosted service for manual triggering)
+// RSS Feed Monitor
+builder.Services.AddSingleton<RssFeedMonitorService>();
+if (selfSchedule)
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<RssFeedMonitorService>());
+
+// YouTube Download Service
 builder.Services.AddSingleton<YouTubeDownloadService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<YouTubeDownloadService>());
+if (selfSchedule)
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<YouTubeDownloadService>());
 
 // Other background services
-builder.Services.AddHostedService<MediaScannerService>();
-builder.Services.AddHostedService<TransmissionMonitorService>();
-builder.Services.AddHostedService<DownloadOrganizerService>();
-builder.Services.AddHostedService<MovieWatchlistService>();
+builder.Services.AddSingleton<MediaScannerService>();
+builder.Services.AddSingleton<TransmissionMonitorService>();
+builder.Services.AddSingleton<DownloadOrganizerService>();
+builder.Services.AddSingleton<MovieWatchlistService>();
+if (selfSchedule)
+{
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<MediaScannerService>());
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<TransmissionMonitorService>());
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<DownloadOrganizerService>());
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<MovieWatchlistService>());
+}
 
 // Crash reporter (subscribes to error logs, sends Telegram + saves crash data)
 builder.Services.AddSingleton<CrashReporter>();
@@ -150,21 +172,7 @@ builder.Services.AddSingleton<CrashReporter>();
 builder.Services.Configure<HostOptions>(opts =>
 	opts.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore);
 
-// Blazor
-builder.Services.AddSingleton<IComponentActivator, FallbackComponentActivator>();
-builder.Services.AddRazorComponents()
-	.AddInteractiveServerComponents();
-
 var app = builder.Build();
-
-if (!app.Environment.IsDevelopment())
-{
-	app.UseExceptionHandler("/Error", createScopeForErrors: true);
-	app.UseHsts();
-}
-app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
-
-app.UseAntiforgery();
 
 // Health check endpoint
 app.MapGet("/health", (MediaBoxState state, MediaDatabase db) =>
@@ -192,9 +200,7 @@ app.MapGet("/health", (MediaBoxState state, MediaDatabase db) =>
 	return Results.Ok(health);
 }).AllowAnonymous();
 
-app.MapStaticAssets();
-app.MapRazorComponents<App>()
-	.AddInteractiveServerRenderMode();
+app.MapGrpcService<MediaBoxControlService>();
 
 // Initialize crash reporter eagerly (subscribes to log events)
 var crashReporter = app.Services.GetRequiredService<CrashReporter>();
