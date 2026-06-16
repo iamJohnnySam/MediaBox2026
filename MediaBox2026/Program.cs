@@ -1,7 +1,5 @@
-using MediaBox2026.Components;
 using MediaBox2026.Models;
 using MediaBox2026.Services;
-using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Options;
 using Serilog;
 using Serilog.Events;
@@ -10,7 +8,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.WebHost.ConfigureKestrel(o =>
 {
-	o.ListenAnyIP(5000); // existing Blazor UI (HTTP/1.1 + 2)
+	o.ListenAnyIP(5000); // /health only (HTTP/1.1)
 	o.ListenAnyIP(5602, l => l.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http2); // gRPC h2c
 });
 
@@ -46,7 +44,7 @@ Log.Logger = new LoggerConfiguration()
 
 builder.Host.UseSerilog();
 
-// In-memory log sink for Blazor log viewer
+// In-memory log sink (consumed by CrashReporter for recent-log context on crashes)
 var logSink = new InMemoryLogSink();
 builder.Services.AddSingleton(logSink);
 builder.Logging.AddProvider(new InMemoryLoggerProvider(logSink));
@@ -174,21 +172,7 @@ builder.Services.AddSingleton<CrashReporter>();
 builder.Services.Configure<HostOptions>(opts =>
 	opts.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore);
 
-// Blazor
-builder.Services.AddSingleton<IComponentActivator, FallbackComponentActivator>();
-builder.Services.AddRazorComponents()
-	.AddInteractiveServerComponents();
-
 var app = builder.Build();
-
-if (!app.Environment.IsDevelopment())
-{
-	app.UseExceptionHandler("/Error", createScopeForErrors: true);
-	app.UseHsts();
-}
-app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
-
-app.UseAntiforgery();
 
 // Health check endpoint
 app.MapGet("/health", (MediaBoxState state, MediaDatabase db) =>
@@ -216,9 +200,6 @@ app.MapGet("/health", (MediaBoxState state, MediaDatabase db) =>
 	return Results.Ok(health);
 }).AllowAnonymous();
 
-app.MapStaticAssets();
-app.MapRazorComponents<App>()
-	.AddInteractiveServerRenderMode();
 app.MapGrpcService<MediaBoxControlService>();
 
 // Initialize crash reporter eagerly (subscribes to log events)
