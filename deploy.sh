@@ -12,7 +12,7 @@ echo "Deploying to $PROD_DIR..."
 # -rlptDv preserves perms/times/symlinks but NOT owner/group, avoiding benign
 # chgrp "Operation not permitted" errors that previously made rsync exit 23 and
 # abort the deploy (under set -e) before the service restart.
-rsync -rlptDv --exclude='data/' --exclude='appsettings.Secrets.json' \
+rsync -rlptDv --exclude='data/' --exclude='appsettings.Secrets.json' --exclude='appsettings.json' \
   "$PUBLISH_DIR/" "$PROD_DIR/"
 
 echo "Setting execute permissions..."

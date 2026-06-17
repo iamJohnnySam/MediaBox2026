@@ -319,7 +319,7 @@ public class MediaBoxControlService(
 				result.Items.Add(new DownloadItem
 				{
 					Name = tor.Name,
-					Percent = tor.PercentDone,
+					Percent = tor.PercentDone * 100,
 					Status = tor.StatusText,
 					SizeBytes = tor.TotalSize,
 					RateDown = tor.RateDownload
