@@ -192,7 +192,7 @@ public class TransmissionMonitorService(
             telegram.PendingCallbacks[callbackId] = tcs;
 
             var sizeGB = item.TotalSize / 1_073_741_824.0;
-            await telegram.SendInlineKeyboardAsync(
+            var messageId = await telegram.SendInlineKeyboardAsync(
                 $"⚠️ Large torrent detected from RSS feed\n\n" +
                 $"📦 {item.TorrentName}\n" +
                 $"📊 Size: {sizeGB:N2} GB\n\n" +
@@ -218,7 +218,10 @@ public class TransmissionMonitorService(
                         if (resumed)
                         {
                             item.Status = LargeTorrentStatus.Approved;
-                            await telegram.SendMessageAsync($"✅ Resumed download: {item.TorrentName}", ct);
+                            if (messageId.HasValue)
+                                await telegram.EditMessageAsync(messageId.Value, $"✅ Resumed\n\n📦 {item.TorrentName}\n\nDownload started.", ct);
+                            else
+                                await telegram.SendMessageAsync($"✅ Resumed download: {item.TorrentName}", ct);
                             state.AddActivity($"Large torrent approved: {item.TorrentName}");
                         }
                     }
@@ -226,7 +229,10 @@ public class TransmissionMonitorService(
                     {
                         item.Status = LargeTorrentStatus.Rejected;
                         await transmission.RemoveTorrentAsync(item.TorrentId, deleteData: true, ct);
-                        await telegram.SendMessageAsync($"❌ Cancelled download: {item.TorrentName}", ct);
+                        if (messageId.HasValue)
+                            await telegram.EditMessageAsync(messageId.Value, $"❌ Cancelled\n\n📦 {item.TorrentName}\n\nTorrent removed.", ct);
+                        else
+                            await telegram.SendMessageAsync($"❌ Cancelled download: {item.TorrentName}", ct);
                         state.AddActivity($"Large torrent rejected: {item.TorrentName}");
                     }
                     db.PendingLargeTorrents.Update(item);

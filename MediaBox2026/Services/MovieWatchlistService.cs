@@ -209,7 +209,7 @@ public class MovieWatchlistService(
                 var tcs = new TaskCompletionSource<string>();
                 telegram.PendingCallbacks[callbackId] = tcs;
 
-                await telegram.SendInlineKeyboardAsync(
+                var messageId = await telegram.SendInlineKeyboardAsync(
                     $"🎬 Found: {bestMatch.Title} ({bestMatch.Year})\n" +
                     $"Quality: {bestMatch.Quality} | Size: {bestMatch.Size}\n" +
                     $"Download?",
@@ -220,7 +220,7 @@ public class MovieWatchlistService(
                         ]
                     ], ct);
 
-                _ = HandleWatchlistCallbackAsync(item, bestMatch, callbackId, tcs, ct);
+                _ = HandleWatchlistCallbackAsync(item, bestMatch, callbackId, tcs, messageId, ct);
             }
             catch (HttpRequestException hex)
             {
@@ -237,7 +237,7 @@ public class MovieWatchlistService(
 
     private async Task HandleWatchlistCallbackAsync(
         WatchlistItem item, YtsResult result, string callbackId,
-        TaskCompletionSource<string> tcs, CancellationToken ct)
+        TaskCompletionSource<string> tcs, int? messageId, CancellationToken ct)
     {
         try
         {
@@ -252,7 +252,10 @@ public class MovieWatchlistService(
                 {
                     item.Status = WatchlistStatus.Downloading;
                     db.Watchlist.Update(item);
-                    await telegram.SendMessageAsync($"📥 Downloading: {result.Title} ({result.Year}) [{result.Quality}]", ct);
+                    if (messageId.HasValue)
+                        await telegram.EditMessageAsync(messageId.Value, $"✅ Downloading\n\n🎬 {result.Title} ({result.Year}) [{result.Quality}]", ct);
+                    else
+                        await telegram.SendMessageAsync($"📥 Downloading: {result.Title} ({result.Year}) [{result.Quality}]", ct);
                     state.AddActivity($"Watchlist download: {result.Title}");
                     state.WatchlistCount = db.Watchlist.Count(w => w.Status == WatchlistStatus.Pending);
                     state.NotifyChange();
@@ -264,6 +267,8 @@ public class MovieWatchlistService(
                 item.TorrentUrl = null;
                 item.Quality = null;
                 db.Watchlist.Update(item);
+                if (messageId.HasValue)
+                    await telegram.EditMessageAsync(messageId.Value, $"⏭️ Skipped\n\n🎬 {result.Title} ({result.Year})", ct);
             }
         }
         catch
