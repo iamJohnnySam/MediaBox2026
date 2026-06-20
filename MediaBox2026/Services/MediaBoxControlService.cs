@@ -131,12 +131,14 @@ public class MediaBoxControlService(
 				return Task.FromResult(new RunResult { Ok = true, Message = "All YouTube downloads paused." });
 			}
 
-			var matchedSource = settings.CurrentValue.NewsSources
-				.FirstOrDefault(s => s.MatchTitle.Contains(arg, StringComparison.OrdinalIgnoreCase));
+			var sources = settings.CurrentValue.NewsSources;
+			var matchedSource = sources.FirstOrDefault(s => s.MatchTitle.Contains(arg, StringComparison.OrdinalIgnoreCase));
 			if (matchedSource is null)
 				return Task.FromResult(new RunResult { Ok = false, Message = $"No source matching \"{arg}\" found." });
 
 			state.PauseSource(matchedSource.MatchTitle);
+			matchedSource.Paused = true;
+			settingsIo.Write(new Dictionary<string, string> { ["NewsSources"] = JsonSerializer.Serialize(sources) });
 			state.AddActivity($"YouTube source paused: {matchedSource.MatchTitle}");
 			logger.LogInformation("⏸️ YouTube source paused via gRPC trigger: {Title}", matchedSource.MatchTitle);
 			return Task.FromResult(new RunResult { Ok = true, Message = $"Paused: {matchedSource.MatchTitle}" });
@@ -164,12 +166,14 @@ public class MediaBoxControlService(
 				return Task.FromResult(new RunResult { Ok = true, Message = "All YouTube downloads resumed." });
 			}
 
-			var matchedSource = settings.CurrentValue.NewsSources
-				.FirstOrDefault(s => s.MatchTitle.Contains(arg, StringComparison.OrdinalIgnoreCase));
+			var sources = settings.CurrentValue.NewsSources;
+			var matchedSource = sources.FirstOrDefault(s => s.MatchTitle.Contains(arg, StringComparison.OrdinalIgnoreCase));
 			if (matchedSource is null)
 				return Task.FromResult(new RunResult { Ok = false, Message = $"No source matching \"{arg}\" found." });
 
 			state.ResumeSource(matchedSource.MatchTitle);
+			matchedSource.Paused = false;
+			settingsIo.Write(new Dictionary<string, string> { ["NewsSources"] = JsonSerializer.Serialize(sources) });
 			state.AddActivity($"YouTube source resumed: {matchedSource.MatchTitle}");
 			logger.LogInformation("▶️ YouTube source resumed via gRPC trigger: {Title}", matchedSource.MatchTitle);
 			return Task.FromResult(new RunResult { Ok = true, Message = $"Resumed: {matchedSource.MatchTitle}" });
