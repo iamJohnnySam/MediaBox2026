@@ -967,7 +967,12 @@ public class TelegramBotService(
             var prefix = data[..colonIdx];
             var value = data[(colonIdx + 1)..];
 
-            if (PendingCallbacks.TryGetValue(prefix, out var tcs))
+            // When Tower owns the bot, pending callbacks are registered on TowerTelegramNotifier
+            // (the ITelegramNotifier), not on this class. Look in the right dictionary.
+            var callbacks = (UseTower && _towerSender != null)
+                ? _towerSender.PendingCallbacks
+                : PendingCallbacks;
+            if (callbacks.TryGetValue(prefix, out var tcs))
             {
                 tcs.TrySetResult(value);
             }
