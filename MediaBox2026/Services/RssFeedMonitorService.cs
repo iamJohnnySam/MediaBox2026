@@ -244,19 +244,31 @@ public class RssFeedMonitorService(
                         Episode = parsed.Episode!.Value,
                         DispatchedDate = DateTime.UtcNow
                     });
+
+                    // This acceptable-quality release supersedes any pending high-quality prompt
+                    // for the same episode: mark it resolved and cancel the Telegram prompt.
+                    // EditMessageAsync sends no reply_markup, which removes the inline keyboard.
+                    var pendingDupe = db.PendingDownloads.FindOne(p =>
+                        p.ShowName == parsed.CleanName &&
+                        p.Season == parsed.Season &&
+                        p.Episode == parsed.Episode &&
+                        p.Status == PendingStatus.WaitingForQuality);
+                    if (pendingDupe != null)
+                    {
+                        pendingDupe.Status = PendingStatus.Downloaded;
+                        db.PendingDownloads.Update(pendingDupe);
+                        logger.LogInformation("✅ Acceptable quality ({Quality}) arrived for pending episode, cancelling prompt: {Title}", quality, title);
+
+                        if (pendingDupe.TelegramMessageId.HasValue)
+                        {
+                            await telegram.EditMessageAsync(
+                                pendingDupe.TelegramMessageId.Value,
+                                $"✅ LOWER QUALITY FOUND\n\n{title}\nDownloaded automatically ({quality}). No response needed.",
+                                ct);
+                        }
+                    }
                 }
                 MarkProcessed(guid, title);
-
-                var pendingDupe = db.PendingDownloads.FindOne(p =>
-                    p.ShowName == parsed.CleanName &&
-                    p.Season == parsed.Season &&
-                    p.Episode == parsed.Episode &&
-                    p.Status == PendingStatus.WaitingForQuality);
-                if (pendingDupe != null)
-                {
-                    pendingDupe.Status = PendingStatus.Downloaded;
-                    db.PendingDownloads.Update(pendingDupe);
-                }
             }
             else
             {
