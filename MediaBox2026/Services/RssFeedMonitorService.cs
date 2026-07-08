@@ -441,6 +441,16 @@ public class RssFeedMonitorService(
                 item.AskedUser = true;
                 item.LastAsked = DateTime.UtcNow;
 
+                // Re-ask: remove the previous message's keyboard so only the newest prompt is live.
+                // (EditMessageAsync sends no reply_markup, which strips the inline buttons.)
+                if (shouldReAsk && item.TelegramMessageId.HasValue)
+                {
+                    await telegram.EditMessageAsync(
+                        item.TelegramMessageId.Value,
+                        $"⌛ {item.RssTitle}\nRe-sent a fresh prompt below — this one is no longer active.",
+                        ct);
+                }
+
                 var callbackId = Guid.NewGuid().ToString("N")[..8];
                 var tcs = new TaskCompletionSource<string>();
                 telegram.PendingCallbacks[callbackId] = tcs;
