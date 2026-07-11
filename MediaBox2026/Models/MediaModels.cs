@@ -233,6 +233,8 @@ public class PendingLargeTorrent : IEntity
     public long TotalSize { get; set; }
     public DateTime AddedDate { get; set; }
     public bool AskedUser { get; set; }
+    public DateTime? LastAsked { get; set; }
+    public int? TelegramMessageId { get; set; }
     public LargeTorrentStatus Status { get; set; } = LargeTorrentStatus.Paused;
 }
 

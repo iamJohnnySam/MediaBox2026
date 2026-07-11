@@ -171,10 +171,17 @@ public class TransmissionMonitorService(
         }
     }
 
+    // Re-ask an unanswered prompt after this long. Cycle-based (not an in-memory timer) so it
+    // survives service restarts — otherwise AskedUser records orphan forever when the process dies.
+    private const int ReAskAfterHours = 24;
+
     private async Task CheckPendingLargeTorrentsAsync(CancellationToken ct)
     {
+        var now = DateTime.UtcNow;
         var pending = db.PendingLargeTorrents
-            .Find(p => p.Status == LargeTorrentStatus.Paused && !p.AskedUser)
+            .Find(p => p.Status == LargeTorrentStatus.Paused &&
+                       (!p.AskedUser ||
+                        (p.LastAsked.HasValue && (now - p.LastAsked.Value).TotalHours >= ReAskAfterHours)))
             .ToList();
 
         if (pending.Count > 0)
@@ -184,8 +191,14 @@ public class TransmissionMonitorService(
 
         foreach (var item in pending)
         {
-            item.AskedUser = true;
-            db.PendingLargeTorrents.Update(item);
+            // Re-ask: strip the previous prompt's keyboard so only the newest one is live.
+            if (item.AskedUser && item.TelegramMessageId.HasValue)
+            {
+                await telegram.EditMessageAsync(
+                    item.TelegramMessageId.Value,
+                    $"⏱️ No response in {ReAskAfterHours}h\n\n📦 {item.TorrentName}\n\nRe-sent a fresh prompt below — this one is no longer active.",
+                    ct);
+            }
 
             var callbackId = Guid.NewGuid().ToString("N")[..8];
             var tcs = new TaskCompletionSource<string>();
@@ -204,11 +217,16 @@ public class TransmissionMonitorService(
                     ]
                 ], ct);
 
+            item.AskedUser = true;
+            item.LastAsked = now;
+            item.TelegramMessageId = messageId;
+            db.PendingLargeTorrents.Update(item);
+
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    using var cts = new CancellationTokenSource(TimeSpan.FromHours(24));
+                    using var cts = new CancellationTokenSource(TimeSpan.FromHours(ReAskAfterHours));
                     var result = await tcs.Task.WaitAsync(cts.Token);
                     telegram.PendingCallbacks.TryRemove(callbackId, out _);
 
