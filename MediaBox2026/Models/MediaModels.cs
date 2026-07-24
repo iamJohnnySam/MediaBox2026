@@ -195,6 +195,9 @@ public class MediaBoxSettings
     public int DownloadOrganizerMinutes { get; set; } = 10;
     public int WatchlistCheckHours { get; set; } = 6;
     public int QualityWaitHours { get; set; } = 4;
+    // After this many hours with no acceptable-quality release, auto-download the pending
+    // higher-quality file (<=1080p only; 4K/2160p still waits for user approval) and dismiss the prompt.
+    public int QualityAutoDownloadHours { get; set; } = 6;
     public int MediaScanHours { get; set; } = 12;
     public bool YouTubeDownloadPaused { get; set; } = false;
 

@@ -345,6 +345,7 @@ public class RssFeedMonitorService(
     private async Task CheckPendingQualityAsync(CancellationToken ct)
     {
         var waitHours = settings.CurrentValue.QualityWaitHours;
+        var autoHours = settings.CurrentValue.QualityAutoDownloadHours;
         var pending = db.PendingDownloads
             .Find(p => p.Status == PendingStatus.WaitingForQuality)
             .ToList();
@@ -410,6 +411,46 @@ public class RssFeedMonitorService(
             {
                 stillWaiting++;
                 logger.LogInformation("⏳ Still waiting for {Title}: {Elapsed:F1}h < {Required}h (since RSS publish)", item.RssTitle, elapsed.TotalHours, waitHours);
+                continue;
+            }
+
+            // No acceptable-quality release appeared within the auto-download window: grab the
+            // pending higher-quality file automatically and dismiss the prompt. 4K/2160p is left
+            // to the manual prompt below — we don't auto-pull huge files.
+            if (elapsed.TotalHours >= autoHours && !FileNameParser.IsAbove1080p(item.Quality))
+            {
+                logger.LogInformation("⤵️ No acceptable release after {Hours:F1}h (>{Auto}h), auto-downloading pending: {Title} ({Quality})",
+                    elapsed.TotalHours, autoHours, item.RssTitle, item.Quality);
+                var added = await transmission.AddTorrentAsync(item.TorrentUrl, ct);
+                if (added)
+                {
+                    item.Status = PendingStatus.Downloaded;
+                    db.PendingDownloads.Update(item);
+                    db.DispatchedEpisodes.Insert(new DispatchedEpisode
+                    {
+                        ShowName = item.ShowName,
+                        Season = item.Season,
+                        Episode = item.Episode,
+                        DispatchedDate = DateTime.UtcNow
+                    });
+                    state.AddActivity($"Auto-downloaded (no better quality): {item.RssTitle}");
+
+                    if (item.TelegramMessageId.HasValue)
+                    {
+                        await telegram.EditMessageAsync(
+                            item.TelegramMessageId.Value,
+                            $"⬇️ AUTO-DOWNLOADED\n\n{item.RssTitle}\nNo better quality after {autoHours}h — downloaded {item.Quality}. No response needed.",
+                            ct);
+                    }
+                    else
+                    {
+                        await telegram.SendMessageAsync($"⬇️ Auto-downloaded (no better quality after {autoHours}h): {item.RssTitle}", ct);
+                    }
+                }
+                else
+                {
+                    logger.LogWarning("Failed to auto-download pending torrent for {Title}", item.RssTitle);
+                }
                 continue;
             }
 
