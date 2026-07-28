@@ -185,11 +185,15 @@ public static partial class FileNameParser
         a = a.ToLowerInvariant().Trim();
         b = b.ToLowerInvariant().Trim();
         if (a == b) return 1.0;
-        if (a.Contains(b) || b.Contains(a)) return 0.9;
 
         var setA = a.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
         var setB = b.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
         if (setA.Count == 0 || setB.Count == 0) return 0;
+
+        // whole-word containment (e.g. "Ted" vs "Ted (2024)"), not raw substring —
+        // raw substring let "Ted" match inside "Superman The Anima[ted] Series"
+        if (setA.IsSubsetOf(setB) || setB.IsSubsetOf(setA)) return 0.9;
+
         var intersection = setA.Intersect(setB).Count();
         var union = setA.Union(setB).Count();
         return (double)intersection / union;
