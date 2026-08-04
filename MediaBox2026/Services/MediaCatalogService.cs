@@ -299,6 +299,7 @@ public class MediaCatalogService(
                 show.Year = year;
                 show.LastScanned = DateTime.UtcNow;
 
+                var previousEpisodes = show.Episodes.Select(e => (e.Season, e.Episode)).ToHashSet();
                 show.Episodes.Clear();
 
                 logger.LogDebug("Scanning files in: {Folder}", folderName);
@@ -340,6 +341,8 @@ public class MediaCatalogService(
                     logger.LogDebug("Scanned {Show}: No episodes found", show.Name);
                 }
 
+                TombstoneRemovedEpisodes(show, previousEpisodes);
+
                 if (isNew)
                     db.TvShows.Insert(show);
                 else
@@ -352,6 +355,44 @@ public class MediaCatalogService(
         }
 
         logger.LogInformation("✅ Completed scanning {Total} TV show folders", totalDirs);
+    }
+
+    /// <summary>
+    /// An episode present at the last scan but gone now was watched and deleted — not
+    /// "never downloaded". Record it in DispatchedEpisodes so the RSS monitor's dedupe
+    /// (RssFeedMonitorService: `db.DispatchedEpisodes.Exists(...)`) suppresses a later
+    /// REPACK re-post of the same episode, which HasEpisode can no longer catch.
+    /// </summary>
+    private void TombstoneRemovedEpisodes(TvShow show, HashSet<(int Season, int Episode)> previousEpisodes)
+    {
+        // ponytail: a folder that scanned to zero episodes is ambiguous (mid-move, bad
+        // permissions, transient mount glitch) and would tombstone the whole show, so skip
+        // it. A fully-deleted folder is already covered — ScanTvShows only walks directories
+        // that exist, so its stale TvShows row survives and HasEpisode keeps returning true.
+        if (show.Episodes.Count == 0) return;
+
+        var removed = previousEpisodes.Except(show.Episodes.Select(e => (e.Season, e.Episode)));
+
+        foreach (var (season, episode) in removed)
+        {
+            // ponytail: exact name match, same as the RSS monitor's own dispatched lookup —
+            // fuzzy matching here would only help if the two ever disagree, which they don't
+            // today (both names come out of FileNameParser).
+            if (db.DispatchedEpisodes.Exists(d =>
+                d.ShowName == show.Name && d.Season == season && d.Episode == episode))
+                continue;
+
+            db.DispatchedEpisodes.Insert(new DispatchedEpisode
+            {
+                ShowName = show.Name,
+                Season = season,
+                Episode = episode,
+                DispatchedDate = DateTime.UtcNow
+            });
+
+            logger.LogInformation("🪦 Episode deleted from disk, tombstoned so it won't re-download: {Show} S{Season}E{Episode}",
+                show.Name, season, episode);
+        }
     }
 
     private void ScanMovies()
