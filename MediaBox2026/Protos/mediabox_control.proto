@@ -21,11 +21,14 @@ service MediaBoxControl {
   rpc GetWatchlist(Empty) returns (WatchlistItems);
   rpc GetYouTubeSources(Empty) returns (YouTubeSources);
   rpc GetSettings(Empty) returns (SettingsMap);
+  rpc GetShowEpisodes(ShowQuery) returns (EpisodeGuide);
+  rpc SearchEpisodeTorrents(EpisodeTorrentQuery) returns (TorrentOptions);
   // Mutations
   rpc AddWatchlist(TitleArg) returns (RunResult);
   rpc RemoveWatchlist(TitleArg) returns (RunResult);
   rpc SearchAndAddMovie(TitleArg) returns (RunResult);
   rpc UpdateSettings(SettingsMap) returns (RunResult);
+  rpc AddEpisodeTorrent(AddEpisodeTorrentArg) returns (RunResult);
 }
 
 message Empty {}
@@ -42,3 +45,36 @@ message WatchlistItems { repeated WatchlistItem items = 1; }
 message YouTubeSource { string title = 1; string url = 2; bool paused = 3; }
 message YouTubeSources { repeated YouTubeSource items = 1; }
 message SettingsMap { map<string,string> values = 1; }
+
+// Episode guide: aired episodes (TVmaze) diffed against what's on disk.
+message ShowQuery { string path = 1; string name = 2; }  // path identifies exactly; name is the fallback + search term
+message EpisodeEntry {
+  int32 season = 1;
+  int32 episode = 2;
+  string title = 3;
+  string air_date = 4;
+  bool aired = 5;   // false = not out yet, which is NOT the same as missing
+  bool have = 6;    // on disk
+}
+message EpisodeGuide {
+  string show = 1;       // the library folder name (what the user clicked)
+  string imdb_id = 2;    // digits only, no "tt" — needed for the torrent search
+  string premiered = 3;
+  repeated EpisodeEntry items = 4;
+  string error = 5;      // non-empty = lookup failed, items is empty
+}
+
+// Per-episode torrent search.
+message EpisodeTorrentQuery { string imdb_id = 1; int32 season = 2; int32 episode = 3; }
+message TorrentOption {
+  string title = 1;
+  string quality = 2;         // "720p" / "1080p" / "unknown"
+  int32 seeds = 3;
+  int32 peers = 4;
+  int64 size_bytes = 5;
+  string magnet = 6;
+  bool season_pack = 7;       // whole-season release containing the episode
+  bool meets_standard = 8;    // within MediaBox's <=720p quality rule
+}
+message TorrentOptions { repeated TorrentOption items = 1; string error = 2; }
+message AddEpisodeTorrentArg { string magnet = 1; string show = 2; int32 season = 3; int32 episode = 4; }

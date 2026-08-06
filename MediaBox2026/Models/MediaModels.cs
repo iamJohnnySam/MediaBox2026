@@ -188,6 +188,11 @@ public class MediaBoxSettings
 
     public string YtDlpArchivePath { get; set; } = "/home/atom/.config/ytdl-archive.txt";
 
+    // Episode guide / manual episode search (EpisodeGuideService). Both keyless.
+    // EZTV moves domain regularly (eztvx.to / eztv.re / ...) — that's why it's config, not a const.
+    public string TvMazeApiUrl { get; set; } = "https://api.tvmaze.com";
+    public string EztvApiUrl { get; set; } = "https://eztvx.to/api/get-torrents";
+
     public List<NewsSource> NewsSources { get; set; } = [];
 
     public int RssFeedCheckMinutes { get; set; } = 30;

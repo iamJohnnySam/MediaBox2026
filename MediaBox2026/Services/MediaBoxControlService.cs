@@ -21,6 +21,7 @@ public class MediaBoxControlService(
 	YouTubeDownloadService youtubeDownload,
 	TransmissionClient transmission,
 	MovieWatchlistService watchlist,
+	EpisodeGuideService episodeGuide,
 	MediaBoxState state,
 	MediaDatabase db,
 	MediaBoxSettingsIo settingsIo,
@@ -381,6 +382,93 @@ public class MediaBoxControlService(
 		{
 			logger.LogError(ex, "gRPC GetLibrary query failed");
 			return Task.FromResult(new MediaList());
+		}
+	}
+
+	/// <summary>
+	/// Aired episodes of one show (TVmaze) with a have/missing flag per episode.
+	/// Errors are returned in the message's `error` field rather than as an RPC fault — Tower renders
+	/// them inline, and a flaky third-party API must not surface as "MediaBox unreachable".
+	/// </summary>
+	public override async Task<EpisodeGuide> GetShowEpisodes(ShowQuery request, ServerCallContext context)
+	{
+		try
+		{
+			var guide = await episodeGuide.GetGuideAsync(request.Path ?? "", request.Name ?? "", context.CancellationToken);
+			var result = new EpisodeGuide
+			{
+				Show = guide.Show,
+				ImdbId = guide.ImdbId,
+				Premiered = guide.Premiered,
+				Error = guide.Error
+			};
+			foreach (var e in guide.Episodes)
+			{
+				result.Items.Add(new EpisodeEntry
+				{
+					Season = e.Season,
+					Episode = e.Episode,
+					Title = e.Title,
+					AirDate = e.AirDate,
+					Aired = e.Aired,
+					Have = e.Have
+				});
+			}
+			return result;
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC GetShowEpisodes query failed");
+			return new EpisodeGuide { Error = ex.Message };
+		}
+	}
+
+	/// <summary>Download candidates for one missing episode (EZTV), best-seeded first.</summary>
+	public override async Task<TorrentOptions> SearchEpisodeTorrents(EpisodeTorrentQuery request, ServerCallContext context)
+	{
+		try
+		{
+			var (choices, error) = await episodeGuide.SearchEpisodeAsync(
+				request.ImdbId ?? "", request.Season, request.Episode, context.CancellationToken);
+
+			var result = new TorrentOptions { Error = error };
+			foreach (var c in choices)
+			{
+				result.Items.Add(new TorrentOption
+				{
+					Title = c.Title,
+					Quality = c.Quality,
+					Seeds = c.Seeds,
+					Peers = c.Peers,
+					SizeBytes = c.SizeBytes,
+					Magnet = c.Magnet,
+					SeasonPack = c.SeasonPack,
+					MeetsStandard = c.MeetsStandard
+				});
+			}
+			return result;
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC SearchEpisodeTorrents query failed");
+			return new TorrentOptions { Error = ex.Message };
+		}
+	}
+
+	/// <summary>Sends a chosen magnet to Transmission (same path as an RSS auto-download).</summary>
+	public override async Task<RunResult> AddEpisodeTorrent(AddEpisodeTorrentArg request, ServerCallContext context)
+	{
+		try
+		{
+			var (ok, message) = await episodeGuide.AddAsync(
+				request.Magnet ?? "", request.Show ?? "", request.Season, request.Episode, context.CancellationToken);
+			if (ok) state.AddActivity($"Manual download: {request.Show} S{request.Season:00}E{request.Episode:00}");
+			return new RunResult { Ok = ok, Message = message };
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC AddEpisodeTorrent failed");
+			return new RunResult { Ok = false, Message = ex.Message };
 		}
 	}
 

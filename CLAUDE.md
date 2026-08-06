@@ -35,6 +35,7 @@ MediaBox2026/                        ← git repo root
     │   ├── JellyfinClient.cs        ← triggers Jellyfin library scan
     │   ├── TransmissionClient.cs    ← Transmission RPC wrapper
     │   ├── MediaDatabase.cs         ← SQLite access layer
+    │   ├── EpisodeGuideService.cs    ← aired-episode guide (TVmaze) + per-episode torrent search (EZTV)
     │   ├── MediaCatalogService.cs
     │   ├── MovieWatchlistService.cs
     │   ├── NewsRssFeedService.cs
@@ -113,6 +114,28 @@ Secrets file lives at both `/home/atom/dev/MediaBox2026/MediaBox2026/appsettings
 - `YtDlpArchivePath` → `/home/atom/.config/ytdl-archive.txt`
 
 ---
+
+## Episode guide (what aired vs. what's on disk)
+
+`EpisodeGuideService` backs Tower's Library tab (`/apps/mediabox` → Library → click a TV row).
+Three gRPC RPCs: `GetShowEpisodes`, `SearchEpisodeTorrents`, `AddEpisodeTorrent`.
+
+- **Aired list = TVmaze**, one call: `singlesearch/shows?q=NAME&embed=episodes` returns the show,
+  its IMDb id and every episode together. Keyless. Base URL is `TvMazeApiUrl` in settings.
+- **Have/missing = the local diff**, `TvShow.Episodes` (filename-parsed by `MediaCatalogService`)
+  vs. the TVmaze list. An episode that hasn't aired yet is flagged `aired=false` and is **not**
+  reported missing — that distinction is the point, otherwise every running show looks incomplete.
+- **Torrents = EZTV** (`EztvApiUrl`, keyed by the IMDb id, `tt` stripped). EZTV has no
+  season/episode filter, so the service pulls up to 3 pages of 100 and filters locally; the list is
+  cached per show for 30 min so opening several episodes costs one fetch. Season packs (EZTV sends
+  `episode: 0`) are returned after the single-episode releases, flagged.
+- **Quality** is `FileNameParser.DetectQuality` + `IsQualityAcceptable` — the same <=720p rule the
+  RSS monitor auto-downloads under. Above-standard releases are still listed, just flagged; the
+  choice is the user's here, unlike the automated path.
+- Adding a torrent inserts a `DispatchedEpisode` tombstone, so the RSS monitor's dedupe doesn't
+  queue the same episode again before the download lands and the next scan sees it.
+- **EZTV moves domain** (eztvx.to → eztv.re → …). When searches start returning nothing, the fix is
+  `EztvApiUrl` in `appsettings.json`, not code.
 
 ## Knowledge Graph (RAG)
 

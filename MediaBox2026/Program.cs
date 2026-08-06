@@ -95,6 +95,7 @@ builder.Services.AddSingleton<TransmissionClient>();
 builder.Services.AddSingleton<JellyfinClient>();
 builder.Services.AddSingleton<MediaCatalogService>();
 builder.Services.AddSingleton<MediaBoxSettingsIo>();
+builder.Services.AddSingleton<EpisodeGuideService>();  // singleton: holds the TVmaze/EZTV response caches
 builder.Services.AddHttpClient();
 
 // Telegram bot wiring — gated on the UseTowerTelegram flag.
