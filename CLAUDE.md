@@ -138,6 +138,12 @@ Three gRPC RPCs: `GetShowEpisodes`, `SearchEpisodeTorrents`, `AddEpisodeTorrent`
   what the tombstone exists to prevent. Adding a torrent from the guide writes one too.
   The 🚫/↺ button on a row adds or lifts a tombstone by hand (`SetEpisodeIgnored`), which is how you
   tell the RSS monitor to never fetch an episode.
+- **Season-wide controls** (`SetSeasonIgnored`, and a season search): ignoring a season tombstones
+  every episode of it not already on disk, *including ones that haven't aired yet* — "ignore this
+  season" has to cover the announced remainder or the next RSS post walks straight past it. Episodes
+  on disk are skipped; a tombstone there says nothing the file doesn't. The season torrent search is
+  the same `SearchEpisodeTorrents` with `episode = 0`: EZTV tags season packs as episode 0, so the
+  existing filter falls through to packs only — no second code path.
 - **Tombstone `ShowName` is inconsistent by origin** — the RSS monitor writes the parsed release
   title, the catalog writes the library folder name — and `DbCollection.Exists` is an ordinal C#
   compare. Both the read and the un-ignore delete therefore match with `FuzzyMatch >= 0.5`, the same

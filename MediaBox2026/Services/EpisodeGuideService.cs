@@ -172,6 +172,10 @@ public class EpisodeGuideService(
     /// <summary>
     /// Download candidates for one episode, best-seeded first. Season packs that contain the episode
     /// are included after the single-episode releases — they're a valid answer, just a bigger one.
+    ///
+    /// <paramref name="episode"/> = 0 asks for the season instead: EZTV marks season packs with
+    /// episode 0, so the same filter falls through to packs only, and the caller gets a season search
+    /// with no second code path.
     /// </summary>
     public async Task<(List<TorrentChoice> Choices, string Error)> SearchEpisodeAsync(
         string imdbId, int season, int episode, CancellationToken ct = default)
@@ -197,7 +201,8 @@ public class EpisodeGuideService(
             .ThenByDescending(c => c.Seeds)
             .ToList();
 
-        return (choices, choices.Count == 0 ? $"No releases found for S{season:00}E{episode:00}." : "");
+        var what = episode == 0 ? $"season {season}" : $"S{season:00}E{episode:00}";
+        return (choices, choices.Count == 0 ? $"No releases found for {what}." : "");
     }
 
     /// <summary>All EZTV torrents for a show, cached per IMDb id (one fetch serves every episode).</summary>
@@ -345,6 +350,49 @@ public class EpisodeGuideService(
         return (true, removed > 0
             ? $"No longer ignored: {label}. RSS can fetch it again."
             : $"Nothing was ignoring {label}.");
+    }
+
+    /// <summary>
+    /// Season-wide version of <see cref="SetIgnored"/>: tombstones every episode of the season that
+    /// isn't already on disk, or lifts every tombstone for it.
+    ///
+    /// Episodes that haven't aired yet are included deliberately — "ignore this season" means the
+    /// announced remainder too, and TVmaze already lists scheduled episodes. Episodes that ARE on disk
+    /// are skipped: a tombstone on them would say nothing (the file is the stronger signal) and would
+    /// be the thing left behind if the file were later deleted.
+    /// </summary>
+    public async Task<(bool Ok, string Message)> SetSeasonIgnoredAsync(
+        string folderPath, string name, int season, bool ignored, CancellationToken ct = default)
+    {
+        if (season <= 0) return (false, "Need a season.");
+
+        var show = ResolveShow(folderPath, name);
+        if (show == null) return (false, $"Show not in the library: {name}");
+
+        if (!ignored)
+        {
+            var lifted = db.DispatchedEpisodes.DeleteMany(d =>
+                d.Season == season && FileNameParser.FuzzyMatch(d.ShowName, show.Name) >= 0.5);
+            logger.LogInformation("↺ Season un-ignored ({Count} tombstone(s) removed): {Show} S{Season}",
+                lifted, show.Name, season);
+            return (true, lifted > 0
+                ? $"Season {season} of {show.Name} is no longer ignored ({lifted} episode(s))."
+                : $"Nothing was ignoring season {season} of {show.Name}.");
+        }
+
+        // The guide is the episode list; TVmaze is cached, so this is a local diff in the common case.
+        var guide = await GetGuideAsync(folderPath, name, ct);
+        if (guide.Error.Length > 0) return (false, guide.Error);
+
+        var targets = guide.Episodes.Where(e => e.Season == season && !e.Have && !e.Dispatched).ToList();
+        foreach (var e in targets)
+            SetIgnored(show.Name, season, e.Episode, true);
+
+        logger.LogInformation("🚫 Season ignored ({Count} episode(s) tombstoned): {Show} S{Season}",
+            targets.Count, show.Name, season);
+        return (true, targets.Count > 0
+            ? $"Ignored {targets.Count} episode(s) in season {season} of {show.Name}. The RSS monitor will skip them."
+            : $"Nothing left to ignore in season {season} of {show.Name}.");
     }
 
     private record EztvTorrent(string Title, int Season, int Episode, int Seeds, int Peers, long SizeBytes, string Magnet);

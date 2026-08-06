@@ -489,6 +489,22 @@ public class MediaBoxControlService(
 		}
 	}
 
+	/// <summary>Season-wide tombstone: ignores (or lifts) every episode of a season not on disk.</summary>
+	public override async Task<RunResult> SetSeasonIgnored(SeasonIgnoreArg request, ServerCallContext context)
+	{
+		try
+		{
+			var (ok, message) = await episodeGuide.SetSeasonIgnoredAsync(
+				request.Path ?? "", request.Name ?? "", request.Season, request.Ignored, context.CancellationToken);
+			return new RunResult { Ok = ok, Message = message };
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC SetSeasonIgnored failed");
+			return new RunResult { Ok = false, Message = ex.Message };
+		}
+	}
+
 	/// <summary>Mirrors the /watchlist Telegram command (Pending + AwaitingConfirmation items).</summary>
 	public override Task<WatchlistItems> GetWatchlist(Empty request, ServerCallContext context)
 	{
