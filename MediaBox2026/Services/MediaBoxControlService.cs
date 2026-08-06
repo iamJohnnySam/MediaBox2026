@@ -411,7 +411,8 @@ public class MediaBoxControlService(
 					Title = e.Title,
 					AirDate = e.AirDate,
 					Aired = e.Aired,
-					Have = e.Have
+					Have = e.Have,
+					Dispatched = e.Dispatched
 				});
 			}
 			return result;
@@ -469,6 +470,22 @@ public class MediaBoxControlService(
 		{
 			logger.LogError(ex, "gRPC AddEpisodeTorrent failed");
 			return new RunResult { Ok = false, Message = ex.Message };
+		}
+	}
+
+	/// <summary>Adds/lifts a manual tombstone so the RSS monitor skips (or resumes) an episode.</summary>
+	public override Task<RunResult> SetEpisodeIgnored(EpisodeIgnoreArg request, ServerCallContext context)
+	{
+		try
+		{
+			var (ok, message) = episodeGuide.SetIgnored(
+				request.Show ?? "", request.Season, request.Episode, request.Ignored);
+			return Task.FromResult(new RunResult { Ok = ok, Message = message });
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC SetEpisodeIgnored failed");
+			return Task.FromResult(new RunResult { Ok = false, Message = ex.Message });
 		}
 	}
 

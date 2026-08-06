@@ -132,8 +132,16 @@ Three gRPC RPCs: `GetShowEpisodes`, `SearchEpisodeTorrents`, `AddEpisodeTorrent`
 - **Quality** is `FileNameParser.DetectQuality` + `IsQualityAcceptable` — the same <=720p rule the
   RSS monitor auto-downloads under. Above-standard releases are still listed, just flagged; the
   choice is the user's here, unlike the automated path.
-- Adding a torrent inserts a `DispatchedEpisode` tombstone, so the RSS monitor's dedupe doesn't
-  queue the same episode again before the download lands and the next scan sees it.
+- **Tombstones are read, not just written.** `DispatchedEpisodes` rows (RSS dispatch, a deliberate
+  delete caught by `TombstoneRemovedEpisodes`, or the guide's own 🚫 button) mark an episode
+  `dispatched` — the UI shows "↻ Queued" instead of "✗ Missing", because re-downloading it is exactly
+  what the tombstone exists to prevent. Adding a torrent from the guide writes one too.
+  The 🚫/↺ button on a row adds or lifts a tombstone by hand (`SetEpisodeIgnored`), which is how you
+  tell the RSS monitor to never fetch an episode.
+- **Tombstone `ShowName` is inconsistent by origin** — the RSS monitor writes the parsed release
+  title, the catalog writes the library folder name — and `DbCollection.Exists` is an ordinal C#
+  compare. Both the read and the un-ignore delete therefore match with `FuzzyMatch >= 0.5`, the same
+  same-show threshold as `FindTvShow`. An `==` would silently miss most rows.
 - **EZTV moves domain** (eztvx.to → eztv.re → …). When searches start returning nothing, the fix is
   `EztvApiUrl` in `appsettings.json`, not code.
 

@@ -58,12 +58,35 @@ public class EpisodeGuideService(
         // The have/missing diff — the whole point of this service. Local episodes come from
         // filename parsing (MediaCatalogService.ScanTvShows), so this is disk truth, not a download log.
         var owned = show.Episodes.Select(e => (e.Season, e.Episode)).ToHashSet();
+        var dispatched = DispatchedFor(show.Name);
         var merged = aired.Episodes
-            .Select(e => e with { Have = owned.Contains((e.Season, e.Episode)) })
+            .Select(e => e with
+            {
+                Have = owned.Contains((e.Season, e.Episode)),
+                Dispatched = dispatched.Contains((e.Season, e.Episode))
+            })
             .ToList();
 
         return aired with { Show = show.Name, Episodes = merged };
     }
+
+    /// <summary>
+    /// Episodes of this show already tombstoned in DispatchedEpisodes — either handed to Transmission
+    /// and not yet on disk, or deleted from disk on purpose (MediaCatalogService.TombstoneRemovedEpisodes).
+    /// Either way "missing" is the wrong word for them, and re-downloading is what the tombstone exists
+    /// to prevent.
+    ///
+    /// Matched fuzzily because the ShowName written into that collection is inconsistent by origin: the
+    /// RSS monitor writes the parsed release title, the catalog writes the library folder name, and
+    /// DbCollection.Exists is an ordinal C# compare — an `==` here would silently miss most of them.
+    /// 0.5 is the same-show threshold used by FindTvShow/HasEpisode; a false positive only mislabels an
+    /// episode as queued, and the magnet button stays available to override it.
+    /// </summary>
+    private HashSet<(int Season, int Episode)> DispatchedFor(string showName) =>
+        db.DispatchedEpisodes.FindAll()
+            .Where(d => FileNameParser.FuzzyMatch(d.ShowName, showName) >= 0.5)
+            .Select(d => (d.Season, d.Episode))
+            .ToHashSet();
 
     private TvShow? ResolveShow(string folderPath, string name)
     {
@@ -279,10 +302,59 @@ public class EpisodeGuideService(
         return (true, $"Added to Transmission: {showName} S{season:00}E{episode:00}");
     }
 
+    // ── Ignore (manual tombstone) ────────────────────────────────────────────
+
+    /// <summary>
+    /// Adds or lifts a tombstone by hand — the "don't ever download this episode" switch. Same
+    /// DispatchedEpisodes rows the RSS monitor dedupes against, so ignoring here is what stops a
+    /// future feed post from being queued.
+    ///
+    /// Lifting deletes fuzzily (same matching as <see cref="DispatchedFor"/>): a tombstone written by
+    /// the RSS monitor under its own spelling of the show name has to be reachable from the library
+    /// name shown in the UI, or the button would appear to do nothing.
+    /// </summary>
+    public (bool Ok, string Message) SetIgnored(string showName, int season, int episode, bool ignored)
+    {
+        if (string.IsNullOrWhiteSpace(showName) || season <= 0 || episode <= 0)
+            return (false, "Need a show, season and episode.");
+
+        var label = $"{showName} S{season:00}E{episode:00}";
+
+        if (ignored)
+        {
+            if (db.DispatchedEpisodes.Exists(d =>
+                    d.ShowName == showName && d.Season == season && d.Episode == episode))
+                return (true, $"Already ignored: {label}");
+
+            db.DispatchedEpisodes.Insert(new DispatchedEpisode
+            {
+                ShowName = showName,
+                Season = season,
+                Episode = episode,
+                DispatchedDate = DateTime.UtcNow
+            });
+            logger.LogInformation("🚫 Episode ignored by hand, RSS will skip it: {Label}", label);
+            return (true, $"Ignored: {label}. The RSS monitor will skip it.");
+        }
+
+        var removed = db.DispatchedEpisodes.DeleteMany(d =>
+            d.Season == season && d.Episode == episode &&
+            FileNameParser.FuzzyMatch(d.ShowName, showName) >= 0.5);
+
+        logger.LogInformation("↺ Episode un-ignored ({Count} tombstone(s) removed): {Label}", removed, label);
+        return (true, removed > 0
+            ? $"No longer ignored: {label}. RSS can fetch it again."
+            : $"Nothing was ignoring {label}.");
+    }
+
     private record EztvTorrent(string Title, int Season, int Episode, int Seeds, int Peers, long SizeBytes, string Magnet);
 }
 
-public record AiredEpisode(int Season, int Episode, string Title, string AirDate, bool Aired, bool Have);
+public record AiredEpisode(int Season, int Episode, string Title, string AirDate, bool Aired, bool Have)
+{
+    /// <summary>Tombstoned in DispatchedEpisodes — already downloading, or deleted on purpose.</summary>
+    public bool Dispatched { get; init; }
+}
 
 public record ShowGuide(string Show, string ImdbId, string Premiered, List<AiredEpisode> Episodes, string Error)
 {

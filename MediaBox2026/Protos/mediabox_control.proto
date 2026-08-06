@@ -29,6 +29,7 @@ service MediaBoxControl {
   rpc SearchAndAddMovie(TitleArg) returns (RunResult);
   rpc UpdateSettings(SettingsMap) returns (RunResult);
   rpc AddEpisodeTorrent(AddEpisodeTorrentArg) returns (RunResult);
+  rpc SetEpisodeIgnored(EpisodeIgnoreArg) returns (RunResult);
 }
 
 message Empty {}
@@ -55,6 +56,7 @@ message EpisodeEntry {
   string air_date = 4;
   bool aired = 5;   // false = not out yet, which is NOT the same as missing
   bool have = 6;    // on disk
+  bool dispatched = 7;  // tombstoned in DispatchedEpisodes: already downloading, or deliberately deleted
 }
 message EpisodeGuide {
   string show = 1;       // the library folder name (what the user clicked)
@@ -78,3 +80,5 @@ message TorrentOption {
 }
 message TorrentOptions { repeated TorrentOption items = 1; string error = 2; }
 message AddEpisodeTorrentArg { string magnet = 1; string show = 2; int32 season = 3; int32 episode = 4; }
+// Manual tombstone: ignored=true stops the RSS monitor ever fetching this episode; false lifts it.
+message EpisodeIgnoreArg { string show = 1; int32 season = 2; int32 episode = 3; bool ignored = 4; }
