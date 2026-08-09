@@ -519,10 +519,14 @@ public class MediaCatalogService(
     {
         var shows = db.TvShows.FindAll().ToList();
 
+        // A row whose folder is gone is deliberately kept (see TombstoneRemovedEpisodes), so a
+        // renamed/merged show can tie on score with its own ghost. The caller writes files to
+        // FolderPath — rank the folder that still exists first, or the organizer recreates the ghost.
         var candidates = shows
             .Select(s => (Show: s, Score: FileNameParser.FuzzyMatch(s.Name, name)))
             .Where(x => x.Score >= 0.5)
-            .OrderByDescending(x => x.Score)
+            .OrderByDescending(x => Directory.Exists(x.Show.FolderPath))
+            .ThenByDescending(x => x.Score)
             .ToList();
 
         TvShow? result = null;
