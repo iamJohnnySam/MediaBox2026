@@ -615,8 +615,17 @@ public class MediaBoxControlService(
 			if (string.IsNullOrWhiteSpace(arg))
 				return Task.FromResult(new RunResult { Ok = false, Message = "Usage: title required." });
 
+			// GetWatchlist renders "Name (Year)", so the web UI's Remove button sends that back
+			// while the stored Name has no year — a raw Contains never matched. Split the year
+			// off and match on the name, which also keeps /remove's partial titles working.
+			var (wantName, wantYear) = FileNameParser.ParseFolderName(arg);
+
 			var toRemove = db.Watchlist.FindAll()
-				.FirstOrDefault(w => w.Name.Contains(arg, StringComparison.OrdinalIgnoreCase));
+				.Where(w => w.Status is WatchlistStatus.Pending
+					or WatchlistStatus.Found or WatchlistStatus.AwaitingConfirmation)
+				.Where(w => !wantYear.HasValue || !w.Year.HasValue || w.Year == wantYear)
+				.FirstOrDefault(w => w.Name.Contains(wantName, StringComparison.OrdinalIgnoreCase)
+					|| FileNameParser.FuzzyMatch(w.Name, wantName) >= 0.5);
 			if (toRemove == null)
 				return Task.FromResult(new RunResult { Ok = false, Message = $"Not found in watchlist: {arg}" });
 
@@ -650,52 +659,123 @@ public class MediaBoxControlService(
 			if (string.IsNullOrWhiteSpace(query))
 				return new RunResult { Ok = false, Message = "Usage: title required." };
 
-			using var http = new HttpClient();
-			var url = $"https://yts.bz/api/v2/list_movies.json?query_term={Uri.EscapeDataString(query)}&limit=10&sort_by=rating";
-			var response = await http.GetAsync(url, context.CancellationToken);
-			if (!response.IsSuccessStatusCode)
-				return new RunResult { Ok = false, Message = "Movie search is temporarily unavailable. Please try again later." };
+			var (results, error) = await SearchYtsAsync(query, context.CancellationToken);
+			if (error != null)
+				return new RunResult { Ok = false, Message = error };
 
-			var jsonText = await response.Content.ReadAsStringAsync(context.CancellationToken);
-			using var doc = JsonDocument.Parse(jsonText);
-			var json = doc.RootElement;
-			if (!json.TryGetProperty("data", out var data) ||
-				!data.TryGetProperty("movies", out var movies) ||
-				movies.ValueKind != JsonValueKind.Array || movies.GetArrayLength() == 0)
-			{
+			var pick = request.ImdbCode?.Trim() ?? "";
+			// A caller that already showed the user the list names its choice; everyone else
+			// (Telegram, the old Tower button) still gets the top-rated hit.
+			var best = pick.Length > 0
+				? results.FirstOrDefault(m => m.ImdbCode == pick)
+				: results.FirstOrDefault();
+
+			if (best == null)
 				return new RunResult { Ok = false, Message = $"No movies found for \"{query}\". Try a different search term." };
-			}
-
-			// Best/top match: first result, mirroring the Telegram flow's initial (sort_by=rating) page.
-			var best = movies[0];
-			var title = best.GetProperty("title").GetString() ?? query;
-			var year = best.GetProperty("year").GetInt32();
-			var imdbCode = best.TryGetProperty("imdb_code", out var ic) ? ic.GetString() : null;
-			var posterUrl = best.TryGetProperty("medium_cover_image", out var p) ? p.GetString() : null;
-			var trailerCode = best.TryGetProperty("yt_trailer_code", out var tr) ? tr.GetString() : null;
 
 			db.Watchlist.Insert(new MediaBox2026.Models.WatchlistItem
 			{
-				Name = title,
-				Year = year,
-				ImdbCode = imdbCode,
-				PosterUrl = posterUrl,
-				TrailerCode = trailerCode,
+				Name = best.Title,
+				Year = best.Year,
+				ImdbCode = best.ImdbCode,
+				PosterUrl = best.PosterUrl,
+				TrailerCode = best.TrailerCode,
 				Status = WatchlistStatus.Pending,
 				AddedDate = DateTime.UtcNow
 			});
 			state.WatchlistCount = db.Watchlist.Count(w => w.Status == WatchlistStatus.Pending);
-			state.AddActivity($"Added to watchlist: {title} ({year})");
+			state.AddActivity($"Added to watchlist: {best.Title} ({best.Year})");
 			state.NotifyChange();
-			logger.LogInformation("gRPC SearchAndAddMovie: matched \"{Query}\" -> \"{Title}\" ({Year}), added to watchlist", query, title, year);
+			logger.LogInformation("gRPC SearchAndAddMovie: matched \"{Query}\" -> \"{Title}\" ({Year}), added to watchlist", query, best.Title, best.Year);
 
-			return new RunResult { Ok = true, Message = $"Added \"{title} ({year})\" to watchlist." };
+			return new RunResult { Ok = true, Message = $"Added \"{best.Title} ({best.Year})\" to watchlist." };
 		}
 		catch (Exception ex)
 		{
 			logger.LogWarning(ex, "gRPC SearchAndAddMovie mutation failed");
 			return new RunResult { Ok = false, Message = ex.Message };
 		}
+	}
+
+	/// <summary>
+	/// The search half of SearchAndAddMovie on its own, so a UI can show the candidates and let
+	/// the user pick: "Angry Birds" ranks Angry Birds 2 above The Angry Birds Movie, and adding
+	/// the top hit silently is exactly the wrong answer when the query is ambiguous.
+	/// </summary>
+	public override async Task<MovieOptions> SearchMovies(TitleArg request, ServerCallContext context)
+	{
+		var result = new MovieOptions();
+		try
+		{
+			var query = request.Title?.Trim() ?? "";
+			if (string.IsNullOrWhiteSpace(query))
+			{
+				result.Error = "Usage: title required.";
+				return result;
+			}
+
+			var (movies, error) = await SearchYtsAsync(query, context.CancellationToken);
+			if (error != null)
+			{
+				result.Error = error;
+				return result;
+			}
+
+			foreach (var m in movies)
+			{
+				result.Items.Add(new MovieOption
+				{
+					Title = m.Title,
+					Year = m.Year,
+					ImdbCode = m.ImdbCode ?? "",
+					PosterUrl = m.PosterUrl ?? "",
+					Rating = m.Rating
+				});
+			}
+
+			if (result.Items.Count == 0)
+				result.Error = $"No movies found for \"{query}\". Try a different search term.";
+
+			return result;
+		}
+		catch (Exception ex)
+		{
+			logger.LogWarning(ex, "gRPC SearchMovies query failed");
+			result.Error = ex.Message;
+			return result;
+		}
+	}
+
+	private record YtsMovie(string Title, int Year, string? ImdbCode, string? PosterUrl, string? TrailerCode, double Rating);
+
+	/// <summary>YTS lookup, sorted the way the Telegram /movie flow's first page is (by rating).</summary>
+	private static async Task<(List<YtsMovie> Movies, string? Error)> SearchYtsAsync(string query, CancellationToken ct)
+	{
+		using var http = new HttpClient();
+		var url = $"https://yts.bz/api/v2/list_movies.json?query_term={Uri.EscapeDataString(query)}&limit=10&sort_by=rating";
+		var response = await http.GetAsync(url, ct);
+		if (!response.IsSuccessStatusCode)
+			return ([], "Movie search is temporarily unavailable. Please try again later.");
+
+		var jsonText = await response.Content.ReadAsStringAsync(ct);
+		using var doc = JsonDocument.Parse(jsonText);
+		var json = doc.RootElement;
+		if (!json.TryGetProperty("data", out var data) ||
+			!data.TryGetProperty("movies", out var movies) ||
+			movies.ValueKind != JsonValueKind.Array || movies.GetArrayLength() == 0)
+		{
+			return ([], $"No movies found for \"{query}\". Try a different search term.");
+		}
+
+		var list = movies.EnumerateArray().Select(m => new YtsMovie(
+			m.GetProperty("title").GetString() ?? query,
+			m.GetProperty("year").GetInt32(),
+			m.TryGetProperty("imdb_code", out var ic) ? ic.GetString() : null,
+			m.TryGetProperty("medium_cover_image", out var p) ? p.GetString() : null,
+			m.TryGetProperty("yt_trailer_code", out var tr) ? tr.GetString() : null,
+			m.TryGetProperty("rating", out var r) ? r.GetDouble() : 0)).ToList();
+
+		return (list, null);
 	}
 
 	/// <summary>Persists non-sensitive settings changes (MediaBoxSettingsIo.Write) -- mirrors the appsettings.json half of Settings.razor's SaveSettings.</summary>
