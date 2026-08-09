@@ -180,15 +180,21 @@ public static partial class FileNameParser
         };
     }
 
+    // "X-Men 97" and "X Men 97" are the same show. Splitting on spaces alone made the hyphen
+    // part of the token, scored them 0.25, and the organizer created a second folder — so fold
+    // punctuation to spaces before tokenizing. Apostrophes are dropped, not spaced, or
+    // "Marvel's" would gain a stray "s" token that "Marvels" doesn't have.
+    private static HashSet<string> Tokenize(string s) =>
+        PunctuationRegex().Replace(s.ToLowerInvariant().Replace("'", "").Replace("’", ""), " ")
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .ToHashSet();
+
     public static double FuzzyMatch(string a, string b)
     {
-        a = a.ToLowerInvariant().Trim();
-        b = b.ToLowerInvariant().Trim();
-        if (a == b) return 1.0;
-
-        var setA = a.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
-        var setB = b.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
+        var setA = Tokenize(a);
+        var setB = Tokenize(b);
         if (setA.Count == 0 || setB.Count == 0) return 0;
+        if (setA.SetEquals(setB)) return 1.0;
 
         // whole-word containment (e.g. "Ted" vs "Ted (2024)"), not raw substring —
         // raw substring let "Ted" match inside "Superman The Anima[ted] Series"
@@ -198,6 +204,9 @@ public static partial class FileNameParser
         var union = setA.Union(setB).Count();
         return (double)intersection / union;
     }
+
+    [GeneratedRegex(@"[^\p{L}\p{N}]+")]
+    private static partial Regex PunctuationRegex();
 
     [GeneratedRegex(@"\b(\d{3,4})p\b", RegexOptions.IgnoreCase)]
     private static partial Regex QualityRegex();
