@@ -58,6 +58,13 @@ public class WatchlistItem : IEntity
     public string? ImdbCode { get; set; }
     public string? PosterUrl { get; set; }
     public string? TrailerCode { get; set; }
+
+    /// <summary>
+    /// When we first saw an above-standard release and nothing acceptable. Starts the same
+    /// QualityWaitHours → ask → QualityAutoDownloadHours → take-it clock the RSS monitor runs
+    /// on TV episodes (PendingDownload.RssPublishDate there).
+    /// </summary>
+    public DateTime? HighQualityFirstSeen { get; set; }
 }
 
 public enum WatchlistStatus

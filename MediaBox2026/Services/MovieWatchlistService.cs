@@ -156,7 +156,8 @@ public class MovieWatchlistService(
                     continue;
                 }
 
-                YtsResult? bestMatch = null;
+                YtsResult? bestMatch = null;   // acceptable quality — take it without asking
+                YtsResult? highMatch = null;   // above standard — goes through the wait/approve clock
                 var matchCount = 0;
                 foreach (var movie in movies.EnumerateArray())
                 {
@@ -179,30 +180,68 @@ public class MovieWatchlistService(
                         var torrentUrl = torrent.GetProperty("url").GetString() ?? "";
                         var size = torrent.TryGetProperty("size", out var s) ? s.GetString() ?? "" : "";
 
-                        if (FileNameParser.IsQualityAcceptable(quality) && !string.IsNullOrEmpty(torrentUrl))
+                        if (string.IsNullOrEmpty(torrentUrl)) continue;
+                        var candidate = new YtsResult(title, year, quality, torrentUrl, size);
+
+                        if (FileNameParser.IsQualityAcceptable(quality))
                         {
-                            bestMatch = new YtsResult(title, year, quality, torrentUrl, size);
+                            bestMatch = candidate;
                             break;
                         }
+
+                        // keep the smallest above-standard release (1080p over 2160p) as the fallback
+                        if (highMatch == null || Resolution(quality) < Resolution(highMatch.Quality))
+                            highMatch = candidate;
                     }
 
                     if (bestMatch != null) break;
                 }
 
-                if (bestMatch == null)
+                if (bestMatch == null && highMatch == null)
                 {
                     logger.LogDebug("⚠️ No suitable match found for: {Name} ({Matches} candidates checked)", item.Name, matchCount);
                     continue;
                 }
 
                 foundCount++;
-                logger.LogInformation("✅ Found match for '{Name}': {Title} ({Year}) [{Quality}] - {Size}", 
-                    item.Name, bestMatch.Title, bestMatch.Year, bestMatch.Quality, bestMatch.Size);
+                var found = bestMatch ?? highMatch!;
+                logger.LogInformation("✅ Found match for '{Name}': {Title} ({Year}) [{Quality}] - {Size}",
+                    item.Name, found.Title, found.Year, found.Quality, found.Size);
+
+                if (!item.Year.HasValue) item.Year = found.Year;
+
+                // Acceptable quality is the standard the RSS monitor auto-downloads under — no prompt.
+                if (bestMatch != null)
+                {
+                    await AutoDownloadAsync(item, bestMatch, $"✅ Auto-downloaded ({bestMatch.Quality})", ct);
+                    continue;
+                }
+
+                item.HighQualityFirstSeen ??= DateTime.UtcNow;
+                var waited = DateTime.UtcNow - item.HighQualityFirstSeen.Value;
+                var waitHours = settings.CurrentValue.QualityWaitHours;
+                var autoHours = settings.CurrentValue.QualityAutoDownloadHours;
+
+                if (waited.TotalHours < waitHours)
+                {
+                    logger.LogInformation("⏳ Only {Quality} available for {Name}: {Elapsed:F1}h < {Wait}h — still looking for a better release",
+                        highMatch!.Quality, item.Name, waited.TotalHours, waitHours);
+                    db.Watchlist.Update(item);
+                    continue;
+                }
+
+                // Nothing acceptable turned up in the whole window — take the high-quality file
+                // rather than wait forever. 4K is still left to the prompt; we don't auto-pull those.
+                if (waited.TotalHours >= autoHours && !FileNameParser.IsAbove1080p(highMatch!.Quality))
+                {
+                    await AutoDownloadAsync(item, highMatch,
+                        $"⬇️ Auto-downloaded (no better quality after {autoHours}h) [{highMatch.Quality}]", ct);
+                    continue;
+                }
 
                 item.Status = WatchlistStatus.AwaitingConfirmation;
-                item.TorrentUrl = bestMatch.TorrentUrl;
-                item.Quality = bestMatch.Quality;
-                if (!item.Year.HasValue) item.Year = bestMatch.Year;
+                item.TorrentUrl = highMatch.TorrentUrl;
+                item.Quality = highMatch.Quality;
                 db.Watchlist.Update(item);
 
                 var callbackId = Guid.NewGuid().ToString("N")[..8];
@@ -210,9 +249,9 @@ public class MovieWatchlistService(
                 telegram.PendingCallbacks[callbackId] = tcs;
 
                 var messageId = await telegram.SendInlineKeyboardAsync(
-                    $"🎬 Found: {bestMatch.Title} ({bestMatch.Year})\n" +
-                    $"Quality: {bestMatch.Quality} | Size: {bestMatch.Size}\n" +
-                    $"Download?",
+                    $"🎬 Found: {highMatch.Title} ({highMatch.Year})\n" +
+                    $"Quality: {highMatch.Quality} | Size: {highMatch.Size}\n" +
+                    $"Only above-standard releases after {waited.TotalHours:F0}h. Download?",
                     [
                         [
                             new InlineButton { Text = "✅ Download", CallbackData = $"{callbackId}:yes" },
@@ -220,7 +259,7 @@ public class MovieWatchlistService(
                         ]
                     ], ct);
 
-                _ = HandleWatchlistCallbackAsync(item, bestMatch, callbackId, tcs, messageId, ct);
+                _ = HandleWatchlistCallbackAsync(item, highMatch, callbackId, tcs, messageId, ct);
             }
             catch (HttpRequestException hex)
             {
@@ -233,6 +272,31 @@ public class MovieWatchlistService(
         }
 
         logger.LogInformation("📊 Watchlist check summary: {Found} matches found out of {Total} items", foundCount, pending.Count);
+    }
+
+    /// <summary>YTS quality strings are "720p"/"1080p"/"2160p"/"3D". "3D" is not a resolution —
+    /// hence DetectQuality's \d+p rather than leading digits, which read it as 3.</summary>
+    public static int Resolution(string quality) =>
+        int.TryParse(FileNameParser.DetectQuality(quality)?.TrimEnd('p'), out var r) ? r : int.MaxValue;
+
+    private async Task AutoDownloadAsync(WatchlistItem item, YtsResult result, string note, CancellationToken ct)
+    {
+        item.TorrentUrl = result.TorrentUrl;
+        item.Quality = result.Quality;
+
+        if (!await transmission.AddTorrentAsync(result.TorrentUrl, ct))
+        {
+            logger.LogWarning("Failed to add watchlist torrent for {Name} [{Quality}]", item.Name, result.Quality);
+            db.Watchlist.Update(item);
+            return;
+        }
+
+        item.Status = WatchlistStatus.Downloading;
+        db.Watchlist.Update(item);
+        await telegram.SendMessageAsync($"{note}\n\n🎬 {result.Title} ({result.Year}) [{result.Quality}]", ct);
+        state.AddActivity($"Watchlist download: {result.Title}");
+        state.WatchlistCount = db.Watchlist.Count(w => w.Status == WatchlistStatus.Pending);
+        state.NotifyChange();
     }
 
     private async Task HandleWatchlistCallbackAsync(
@@ -266,6 +330,9 @@ public class MovieWatchlistService(
                 item.Status = WatchlistStatus.Pending;
                 item.TorrentUrl = null;
                 item.Quality = null;
+                // ponytail: restart the clock instead of cancelling — a skipped 1080p means "keep
+                // looking", and without this the next cycle is already past the wait and re-asks.
+                item.HighQualityFirstSeen = DateTime.UtcNow;
                 db.Watchlist.Update(item);
                 if (messageId.HasValue)
                     await telegram.EditMessageAsync(messageId.Value, $"⏭️ Skipped\n\n🎬 {result.Title} ({result.Year})", ct);

@@ -14,4 +14,14 @@ Debug.Assert(FileNameParser.FuzzyMatch("Ted", "Superman The Animated Series") < 
 Debug.Assert(FileNameParser.FuzzyMatch("X-Men 97", "The X Files") < 0.5);
 Debug.Assert(FileNameParser.FuzzyMatch("Ted Lasso", "Ted") >= 0.5); // subset rule, unchanged
 
+// watchlist quality tiers: acceptable -> auto, above-standard -> wait/ask, above 1080p -> ask only
+Debug.Assert(FileNameParser.IsQualityAcceptable("720p"));
+Debug.Assert(!FileNameParser.IsQualityAcceptable("1080p"));
+Debug.Assert(!FileNameParser.IsAbove1080p("1080p"));   // 1080p can auto-download after the window
+Debug.Assert(FileNameParser.IsAbove1080p("2160p"));    // 4K never does
+
+// fallback picks the smallest above-standard release; "3D" sorts last
+Debug.Assert(MovieWatchlistService.Resolution("1080p") < MovieWatchlistService.Resolution("2160p"));
+Debug.Assert(MovieWatchlistService.Resolution("2160p") < MovieWatchlistService.Resolution("3D"));
+
 Console.WriteLine("ok");
