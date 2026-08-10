@@ -35,6 +35,14 @@ Debug.Assert(FileNameParser.FuzzyMatch("The Good Dinosaur", "Good Dinosaur") > 0
 Debug.Assert(MovieWatchlistService.Resolution("1080p") < MovieWatchlistService.Resolution("2160p"));
 Debug.Assert(MovieWatchlistService.Resolution("2160p") < MovieWatchlistService.Resolution("3D"));
 
+// The "already in the library" guard parses a release name first. A season pack carries no SxxExx
+// and therefore parses as a film — the TV-show lookup, not this flag, is what excludes it.
+Debug.Assert(FileNameParser.Parse("Angry Birds (2016) [3D] [HSBS] [YTS.AG]").CleanName == "Angry Birds");
+Debug.Assert(FileNameParser.Parse("Angry Birds (2016) [3D] [HSBS] [YTS.AG]").Year == 2016);
+Debug.Assert(FileNameParser.Parse("Angry.Birds.2016.1080p.BluRay.6CH.ShAaNiG.mkv").CleanName == "Angry Birds");
+Debug.Assert(!FileNameParser.Parse("The Grand Tour 2016 Seasons 1 to 5 Complete 720p WEB x264 [i_c]").IsTvShow);
+Debug.Assert(FileNameParser.Parse("Futurama.S14E03.480p.x264-mSD[EZTVx.to].mkv").IsTvShow);
+
 // planned downloads: the window opens on the configured day+hour, once per calendar month
 var day14 = new DateTime(2026, 8, 14, 9, 0, 0);
 Debug.Assert(TransmissionMonitorService.IsPromptDue(day14, 14, 8, null));

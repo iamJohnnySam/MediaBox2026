@@ -5,6 +5,7 @@ namespace MediaBox2026.Services;
 
 public class TransmissionMonitorService(
     TransmissionClient transmission,
+    MediaCatalogService catalog,
     MediaDatabase db,
     ITelegramNotifier telegram,
     MediaBoxState state,
@@ -198,6 +199,23 @@ public class TransmissionMonitorService(
         : $"{bytes / 1_048_576.0:N0} MB";
 
     /// <summary>
+    /// The library film a release name refers to, or null. TV is deliberately excluded: a season pack
+    /// legitimately fills gaps in a show already on disk, so "have the show" is not "have this", and
+    /// answering that properly is an episode-level question this does not attempt. A pack like
+    /// "The Grand Tour 2016 Seasons 1 to 5" carries no SxxExx and parses as a film, so the show
+    /// lookup — not the parse flag — is what keeps it out.
+    /// </summary>
+    private Movie? OwnedMovieFor(string releaseName)
+    {
+        var parsed = FileNameParser.Parse(releaseName);
+        var name = parsed.CleanName.Length > 0 ? parsed.CleanName : releaseName;
+
+        if (parsed.IsTvShow || catalog.FindTvShow(name) != null) return null;
+
+        return catalog.FindOwnedMovie(name, parsed.Year);
+    }
+
+    /// <summary>
     /// The planned-download window: torrents parked with "📅 Plan for later" wait for the configured
     /// day of the month, get one prompt that morning, run for the rest of that local day if approved,
     /// and are parked again at midnight if they haven't finished.
@@ -376,6 +394,32 @@ public class TransmissionMonitorService(
             logger.LogInformation("Dropping pending large torrent no longer in Transmission: {Name}", gone.TorrentName);
             db.PendingLargeTorrents.DeleteMany(p => p.Id == gone.Id);
         }
+        // A film already in the library needs no prompt — asking would be asking permission to fetch a
+        // duplicate, which is what happened to Angry Birds and The Good Dinosaur: both had already
+        // landed from a different release, and their prompts kept returning every 24h regardless.
+        foreach (var item in db.PendingLargeTorrents
+                     .Find(p => p.Status == LargeTorrentStatus.Paused && p.Hash != "")
+                     .ToList())
+        {
+            if (OwnedMovieFor(item.TorrentName) is not { } owned) continue;
+
+            item.Status = LargeTorrentStatus.Rejected;
+            db.PendingLargeTorrents.Update(item);
+
+            // deleteData: false — the torrent goes, anything already on disk stays. This is the one
+            // place a library heuristic cancels a download, so it must not also delete bytes.
+            await transmission.RemoveTorrentAsync(item.Hash, deleteData: false, ct);
+
+            logger.LogInformation("📚 Large torrent already in library as '{Owned}' ({Year}), removed without asking: {Name}",
+                owned.Name, owned.Year, item.TorrentName);
+            await telegram.SendMessageAsync(
+                $"📚 Already in library — skipped\n\n" +
+                $"📦 {item.TorrentName}\n" +
+                $"🎬 Matched: {owned.Name}{(owned.Year.HasValue ? $" ({owned.Year})" : "")}\n\n" +
+                $"Torrent removed; files on disk untouched.", ct);
+            state.AddActivity($"Large torrent skipped, already held: {item.TorrentName}");
+        }
+
         var pending = db.PendingLargeTorrents
             .Find(p => p.Status == LargeTorrentStatus.Paused &&
                        (!p.AskedUser ||

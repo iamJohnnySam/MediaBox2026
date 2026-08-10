@@ -558,6 +558,32 @@ public class MediaCatalogService(
             .FirstOrDefault().Movie;
     }
 
+    /// <summary>
+    /// Like <see cref="FindMovie"/>, but only returns a match confident enough to <b>cancel a download
+    /// on</b>. Use this wherever a hit means "don't fetch it"; use FindMovie when a wrong answer only
+    /// misfiles something.
+    ///
+    /// FindMovie's 0.6 fuzzy threshold is right for filing a finished file and far too loose for this:
+    /// a sequel differs from its predecessor by one trailing token and scores <b>0.90</b>
+    /// ("The Angry Birds Movie" vs "The Angry Birds Movie 2"), so a name-only match would silently
+    /// refuse every sequel of a film already held. The year therefore has to agree — FindMovie already
+    /// filters on it when known — or the title has to match outright.
+    ///
+    /// A yearless request consequently needs an exact title and may re-fetch something already held.
+    /// That is the safe direction to fail: a duplicate download costs bandwidth, a false positive
+    /// costs a film you never get.
+    /// </summary>
+    public Movie? FindOwnedMovie(string name, int? year)
+    {
+        var owned = FindMovie(name, year);
+        if (owned == null) return null;
+
+        if (!year.HasValue && !string.Equals(owned.Name, name, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return owned;
+    }
+
     public int GetLatestSeason(string showName)
     {
         var show = FindTvShow(showName);

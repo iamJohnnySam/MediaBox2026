@@ -625,9 +625,14 @@ public class MediaBoxControlService(
 				return Task.FromResult(new RunResult { Ok = false, Message = "Usage: title required." });
 
 			var parsed = FileNameParser.Parse(arg);
+			var name = parsed.CleanName.Length > 0 ? parsed.CleanName : arg;
+
+			if (ResolveWatchlistDuplicate(arg, name, parsed.Year, null) is { } dup)
+				return Task.FromResult(dup);
+
 			db.Watchlist.Insert(new MediaBox2026.Models.WatchlistItem
 			{
-				Name = parsed.CleanName.Length > 0 ? parsed.CleanName : arg,
+				Name = name,
 				Year = parsed.Year,
 				Status = WatchlistStatus.Pending,
 				AddedDate = DateTime.UtcNow
@@ -642,6 +647,68 @@ public class MediaBoxControlService(
 			logger.LogError(ex, "gRPC AddWatchlist mutation failed");
 			return Task.FromResult(new RunResult { Ok = false, Message = ex.Message });
 		}
+	}
+
+	/// <summary>
+	/// The watchlist row for a film already on the list, or null. Both add paths go through this, so
+	/// one film can never hold two rows however it was added.
+	///
+	/// Matching is deliberately strict rather than fuzzy. An IMDb code is exact, so the search path
+	/// uses only that. The name-only path requires the title and year to match outright: dedupe exists
+	/// to catch the *same request twice* (a double tap, a repeated Telegram command), which is an exact
+	/// repeat, and <see cref="FileNameParser.FuzzyMatch"/> scores a sequel 0.90 against its predecessor
+	/// — enough to refuse "The Angry Birds Movie 2" because the first one is already listed.
+	/// </summary>
+	private MediaBox2026.Models.WatchlistItem? FindWatchlistDuplicate(string name, int? year, string? imdbCode)
+	{
+		var rows = db.Watchlist.FindAll();
+
+		var matches = !string.IsNullOrWhiteSpace(imdbCode)
+			? rows.Where(w => string.Equals(w.ImdbCode, imdbCode, StringComparison.OrdinalIgnoreCase))
+			: rows.Where(w =>
+				string.Equals(w.Name.Trim(), name.Trim(), StringComparison.OrdinalIgnoreCase) &&
+				w.Year == year);
+
+		// An active row wins over a finished or cancelled one. Films added before dedupe existed can
+		// hold several rows — tt1985949 has both a Cancelled and a Downloading one — and taking
+		// whichever came first would re-arm the dead row while the live one was already running.
+		return matches.OrderByDescending(w => IsActive(w.Status)).FirstOrDefault();
+	}
+
+	/// <summary>Statuses that mean the film is still moving through the pipeline — re-adding does nothing.</summary>
+	private static bool IsActive(WatchlistStatus s) =>
+		s is WatchlistStatus.Pending or WatchlistStatus.Found
+		  or WatchlistStatus.AwaitingConfirmation or WatchlistStatus.Downloading;
+
+	/// <summary>
+	/// Applies the dedupe decision. Returns the reply to send when the caller should stop, or null to
+	/// go ahead and insert. A finished or cancelled row is re-armed in place rather than left behind
+	/// and duplicated, which is what keeps it at one row per film for good.
+	/// </summary>
+	private RunResult? ResolveWatchlistDuplicate(string label, string name, int? year, string? imdbCode)
+	{
+		var existing = FindWatchlistDuplicate(name, year, imdbCode);
+		if (existing == null) return null;
+
+		if (IsActive(existing.Status))
+		{
+			logger.LogInformation("Watchlist add ignored, already listed as {Status}: {Name}", existing.Status, existing.Name);
+			return new RunResult { Ok = false, Message = $"Already on the watchlist ({existing.Status}): {label}" };
+		}
+
+		var was = existing.Status;
+		existing.Status = WatchlistStatus.Pending;
+		existing.HighQualityFirstSeen = null;   // fresh quality clock, not the one from the last attempt
+		existing.TorrentUrl = null;
+		existing.Quality = null;
+		existing.AddedDate = DateTime.UtcNow;
+		db.Watchlist.Update(existing);
+
+		state.WatchlistCount = db.Watchlist.Count(w => w.Status == WatchlistStatus.Pending);
+		state.AddActivity($"Re-armed watchlist item: {existing.Name}");
+		state.NotifyChange();
+		logger.LogInformation("Watchlist item re-armed from {Old}: {Name}", was, existing.Name);
+		return new RunResult { Ok = true, Message = $"Back on the watchlist: {label}" };
 	}
 
 	/// <summary>Mirrors the /remove Telegram command: cancel the first watchlist entry whose name contains the title.</summary>
@@ -710,6 +777,9 @@ public class MediaBoxControlService(
 
 			if (best == null)
 				return new RunResult { Ok = false, Message = $"No movies found for \"{query}\". Try a different search term." };
+
+			if (ResolveWatchlistDuplicate($"{best.Title} ({best.Year})", best.Title, best.Year, best.ImdbCode) is { } dup)
+				return dup;
 
 			db.Watchlist.Insert(new MediaBox2026.Models.WatchlistItem
 			{

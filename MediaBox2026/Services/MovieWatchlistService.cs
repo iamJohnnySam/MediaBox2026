@@ -128,19 +128,8 @@ public class MovieWatchlistService(
                 // Already on disk — nothing to fetch. Checked every cycle rather than only at add
                 // time, because the film can land from any other release (or by hand) afterwards;
                 // that is how a watchlist item outlived a copy already sitting in the library.
-                var owned = catalog.FindMovie(item.Name, item.Year);
-
-                // FindMovie's 0.6 fuzzy threshold scores "The Angry Birds Movie" against
-                // "The Angry Birds Movie 2" at 0.90 — fine for filing a downloaded file, far too
-                // loose for silently cancelling a download, since a sequel differs by exactly that
-                // one trailing token. So the year has to agree (FindMovie already filters on it
-                // when known), or the title has to match outright.
-                // ponytail: a yearless item therefore still needs an exact title; it falls through
-                // to the search and may re-fetch a film already held. Failing that way round is the
-                // safe one — resolve the year on add if that ever becomes the common case.
-                if (owned != null && !item.Year.HasValue &&
-                    !string.Equals(owned.Name, item.Name, StringComparison.OrdinalIgnoreCase))
-                    owned = null;
+                // The year-gating that makes this safe for sequels lives in FindOwnedMovie.
+                var owned = catalog.FindOwnedMovie(item.Name, item.Year);
 
                 if (owned != null)
                 {
@@ -242,6 +231,24 @@ public class MovieWatchlistService(
                     item.Name, found.Title, found.Year, found.Quality, found.Size);
 
                 if (!item.Year.HasValue) item.Year = found.Year;
+
+                // Second ownership check, now that YTS has supplied the year. The pre-search one above
+                // cannot fire for a yearless entry — "Good Dinosaur" is not an exact match for the
+                // library's "The Good Dinosaur", and matching on the name alone would refuse sequels.
+                // With a year in hand that ambiguity is gone, and this costs no extra request.
+                if (catalog.FindOwnedMovie(found.Title, item.Year) is { } already)
+                {
+                    logger.LogInformation("📚 '{Name}' resolved to '{Title}' ({Year}), already in library — not downloading",
+                        item.Name, found.Title, item.Year);
+                    item.Status = WatchlistStatus.Downloaded;
+                    db.Watchlist.Update(item);
+                    state.WatchlistCount = db.Watchlist.Count(w => w.Status == WatchlistStatus.Pending);
+                    state.NotifyChange();
+                    await telegram.SendMessageAsync(
+                        $"📚 Already in library: {already.Name}{(already.Year.HasValue ? $" ({already.Year})" : "")}\n\n" +
+                        $"Closed \"{item.Name}\" on the watchlist — nothing downloaded.", ct);
+                    continue;
+                }
 
                 // Acceptable quality is the standard the RSS monitor auto-downloads under — no prompt.
                 if (bestMatch != null)
