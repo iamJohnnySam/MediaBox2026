@@ -20,6 +20,12 @@ Debug.Assert(!FileNameParser.IsQualityAcceptable("1080p"));
 Debug.Assert(!FileNameParser.IsAbove1080p("1080p"));   // 1080p can auto-download after the window
 Debug.Assert(FileNameParser.IsAbove1080p("2160p"));    // 4K never does
 
+// "3D" must not read as resolution 3 and slip past the <=720 standard (YTS quality string)
+Debug.Assert(!FileNameParser.IsQualityAcceptable("3D"));
+Debug.Assert(!FileNameParser.IsQualityAcceptable("Angry Birds (2016) [3D] [HSBS] [YTS.AG]"));
+Debug.Assert(FileNameParser.IsQualityAcceptable("480p"));
+Debug.Assert(FileNameParser.IsQualityAcceptable(null));  // unknown stays acceptable
+
 // fallback picks the smallest above-standard release; "3D" sorts last
 Debug.Assert(MovieWatchlistService.Resolution("1080p") < MovieWatchlistService.Resolution("2160p"));
 Debug.Assert(MovieWatchlistService.Resolution("2160p") < MovieWatchlistService.Resolution("3D"));

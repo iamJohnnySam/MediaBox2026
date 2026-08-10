@@ -136,7 +136,11 @@ public static partial class FileNameParser
     public static bool IsQualityAcceptable(string? quality)
     {
         if (string.IsNullOrEmpty(quality)) return true;
-        var match = Regex.Match(quality, @"(\d+)");
+        // "3D" is a YTS quality string, not a resolution — a bare \d+ read it as 3, passed the
+        // <=720 test, and auto-downloaded a 1.49 GB half-SBS rip ahead of the 714 MB 720p.
+        // Never the standard release, so it fails the standard outright.
+        if (quality.Contains("3D", StringComparison.OrdinalIgnoreCase)) return false;
+        var match = Regex.Match(quality, @"(\d+)p", RegexOptions.IgnoreCase);
         if (match.Success && int.TryParse(match.Groups[1].Value, out var res))
             return res <= 720;
         return true;
@@ -148,7 +152,8 @@ public static partial class FileNameParser
     public static bool IsAbove1080p(string? quality)
     {
         if (string.IsNullOrEmpty(quality)) return false;
-        var match = Regex.Match(quality, @"(\d+)");
+        // \d+p for the same reason as IsQualityAcceptable — these two must read a tag the same way.
+        var match = Regex.Match(quality, @"(\d+)p", RegexOptions.IgnoreCase);
         if (match.Success && int.TryParse(match.Groups[1].Value, out var res))
             return res > 1080;
         return false;
