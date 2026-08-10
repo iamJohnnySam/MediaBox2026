@@ -30,6 +30,10 @@ service MediaBoxControl {
   rpc SearchAndAddMovie(TitleArg) returns (RunResult);
   rpc UpdateSettings(SettingsMap) returns (RunResult);
   rpc AddEpisodeTorrent(AddEpisodeTorrentArg) returns (RunResult);
+  // Per-torrent controls for Tower's downloads page. Keyed by the sha1 hash, never by the
+  // session id, which Transmission renumbers across its own restarts.
+  rpc PauseTorrent(TorrentRef) returns (RunResult);
+  rpc ResumeTorrent(TorrentRef) returns (RunResult);
   rpc SetEpisodeIgnored(EpisodeIgnoreArg) returns (RunResult);
   rpc SetSeasonIgnored(SeasonIgnoreArg) returns (RunResult);
 }
@@ -41,7 +45,8 @@ message TitleArg { string title = 1; string imdb_code = 2; }
 message LibraryQuery { string type = 1; }  // "tv" | "movies"
 message RunResult { bool ok = 1; string message = 2; }
 message Status { int32 tv_shows = 1; int32 movies = 2; int32 active_downloads = 3; bool speed_mode = 4; string summary = 5; }
-message DownloadItem { string name = 1; double percent = 2; string status = 3; int64 size_bytes = 4; double rate_down = 5; }
+message DownloadItem { string name = 1; double percent = 2; string status = 3; int64 size_bytes = 4; double rate_down = 5; string hash = 6; bool paused = 7; }
+message TorrentRef { string hash = 1; }
 message DownloadList { repeated DownloadItem items = 1; }
 message MediaItem { string name = 1; string year = 2; int32 seasons = 3; string path = 4; }
 message MediaList { repeated MediaItem items = 1; }

@@ -123,11 +123,11 @@ public class TransmissionMonitorService(
             if (torrent.DateAdded > 0 && (now - torrent.DateAdded) <= recentWindow)
             {
                 // Check if we've already processed this torrent
-                var existing = db.PendingLargeTorrents.FindOne(p => p.TorrentId == torrent.Id);
+                var existing = db.PendingLargeTorrents.FindOne(p => p.Hash == torrent.HashString);
                 if (existing == null)
                 {
                     // New large torrent detected - pause it
-                    var paused = await transmission.PauseTorrentAsync(torrent.Id, ct);
+                    var paused = await transmission.PauseTorrentAsync(torrent.HashString, ct);
                     if (paused)
                     {
                         logger.LogInformation("⏸️ Paused large torrent from RSS: {Name} ({Size:N2} GB)", 
@@ -137,6 +137,7 @@ public class TransmissionMonitorService(
                         db.PendingLargeTorrents.Insert(new PendingLargeTorrent
                         {
                             TorrentId = torrent.Id,
+                            Hash = torrent.HashString,
                             TorrentName = torrent.Name,
                             TotalSize = torrent.TotalSize,
                             AddedDate = DateTime.UtcNow,
@@ -166,7 +167,7 @@ public class TransmissionMonitorService(
         }
 
         // Check pending large torrents and ask for approval if not yet asked
-        await CheckPendingLargeTorrentsAsync(ct);
+        await CheckPendingLargeTorrentsAsync(torrents, ct);
 
         var completed = torrents.Where(t => t.IsFinished).ToList();
         if (completed.Count > 0)
@@ -177,11 +178,11 @@ public class TransmissionMonitorService(
         foreach (var torrent in completed)
         {
             logger.LogInformation("🗑️ Removing completed torrent: {Name}", torrent.Name);
-            await transmission.RemoveTorrentAsync(torrent.Id, deleteData: false, ct);
+            await transmission.RemoveTorrentAsync(torrent.HashString, deleteData: false, ct);
             state.AddActivity($"Torrent completed: {torrent.Name}");
 
             // Clean up any pending large torrent record
-            db.PendingLargeTorrents.DeleteMany(p => p.TorrentId == torrent.Id);
+            db.PendingLargeTorrents.DeleteMany(p => p.Hash == torrent.HashString);
         }
 
         if (completed.Count > 0)
@@ -199,9 +200,32 @@ public class TransmissionMonitorService(
     // survives service restarts — otherwise AskedUser records orphan forever when the process dies.
     private const int ReAskAfterHours = 24;
 
-    private async Task CheckPendingLargeTorrentsAsync(CancellationToken ct)
+    private async Task CheckPendingLargeTorrentsAsync(List<TorrentInfo> torrents, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
+
+        // Rows written before the hash was stored carry only a session id, which Transmission has
+        // since renumbered. Match those back up by name so an old row still acts on its real torrent.
+        foreach (var legacy in db.PendingLargeTorrents.Find(p => p.Hash == "").ToList())
+        {
+            var match = torrents.FirstOrDefault(t => t.Name == legacy.TorrentName);
+            if (match == null) continue;
+            legacy.Hash = match.HashString;
+            db.PendingLargeTorrents.Update(legacy);
+            logger.LogInformation("Backfilled hash for pending large torrent: {Name}", legacy.TorrentName);
+        }
+
+        // A row whose torrent is no longer in Transmission has nothing left to approve; without this
+        // it would re-prompt every ReAskAfterHours forever. Only rows that already carry a hash are
+        // judged — a legacy row that just failed to match above may simply be paused and unlisted.
+        var live = torrents.Select(t => t.HashString).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var gone in db.PendingLargeTorrents
+                     .Find(p => p.Status == LargeTorrentStatus.Paused && p.Hash != "" && !live.Contains(p.Hash))
+                     .ToList())
+        {
+            logger.LogInformation("Dropping pending large torrent no longer in Transmission: {Name}", gone.TorrentName);
+            db.PendingLargeTorrents.DeleteMany(p => p.Id == gone.Id);
+        }
         var pending = db.PendingLargeTorrents
             .Find(p => p.Status == LargeTorrentStatus.Paused &&
                        (!p.AskedUser ||
@@ -256,7 +280,7 @@ public class TransmissionMonitorService(
 
                     if (result == "resume")
                     {
-                        var resumed = await transmission.ResumeTorrentAsync(item.TorrentId, ct);
+                        var resumed = await transmission.ResumeTorrentAsync(item.Hash, ct);
                         if (resumed)
                         {
                             item.Status = LargeTorrentStatus.Approved;
@@ -270,7 +294,7 @@ public class TransmissionMonitorService(
                     else
                     {
                         item.Status = LargeTorrentStatus.Rejected;
-                        await transmission.RemoveTorrentAsync(item.TorrentId, deleteData: true, ct);
+                        await transmission.RemoveTorrentAsync(item.Hash, deleteData: true, ct);
                         if (messageId.HasValue)
                             await telegram.EditMessageAsync(messageId.Value, $"❌ Cancelled\n\n📦 {item.TorrentName}\n\nTorrent removed.", ct);
                         else

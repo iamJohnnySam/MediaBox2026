@@ -35,7 +35,7 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
     public async Task<List<TorrentInfo>> GetTorrentsAsync(CancellationToken ct = default)
     {
         var fields = new JsonArray();
-        foreach (var field in new[] { "id", "name", "status", "percentDone", "totalSize", "downloadDir", "addedDate", "rateDownload" })
+        foreach (var field in new[] { "id", "name", "hashString", "status", "percentDone", "totalSize", "downloadDir", "addedDate", "rateDownload" })
             fields.Add(JsonValue.Create(field));
 
         var request = new JsonObject
@@ -60,6 +60,7 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
                 {
                     Id = t.GetProperty("id").GetInt32(),
                     Name = t.GetProperty("name").GetString() ?? "",
+                    HashString = t.TryGetProperty("hashString", out var hs) ? hs.GetString() ?? "" : "",
                     Status = t.GetProperty("status").GetInt32(),
                     PercentDone = t.GetProperty("percentDone").GetDouble(),
                     TotalSize = t.GetProperty("totalSize").GetInt64(),
@@ -72,7 +73,10 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
         return torrents;
     }
 
-    public async Task RemoveTorrentAsync(int id, bool deleteData = false, CancellationToken ct = default)
+    // These three take the id as a string because Transmission's "ids" argument accepts sha1 hash
+    // strings as well as session ids, and the numeric id is renumbered across Transmission restarts.
+    // Anything persisting an identifier must store the hash, or it acts on the wrong torrent later.
+    public async Task RemoveTorrentAsync(string id, bool deleteData = false, CancellationToken ct = default)
     {
         var request = new JsonObject
         {
@@ -87,7 +91,7 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
         logger.LogInformation("Torrent removed: {Id} (deleteData: {Delete})", id, deleteData);
     }
 
-    public async Task<bool> PauseTorrentAsync(int id, CancellationToken ct = default)
+    public async Task<bool> PauseTorrentAsync(string id, CancellationToken ct = default)
     {
         var request = new JsonObject
         {
@@ -106,7 +110,7 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
         return false;
     }
 
-    public async Task<bool> ResumeTorrentAsync(int id, CancellationToken ct = default)
+    public async Task<bool> ResumeTorrentAsync(string id, CancellationToken ct = default)
     {
         var request = new JsonObject
         {

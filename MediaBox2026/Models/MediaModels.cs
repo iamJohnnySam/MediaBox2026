@@ -131,6 +131,8 @@ public class TorrentInfo
 {
     public int Id { get; set; }
     public string Name { get; set; } = "";
+    /// <summary>sha1 hash. Stable across Transmission restarts, unlike Id — persist this, not Id.</summary>
+    public string HashString { get; set; } = "";
     public double PercentDone { get; set; }
     public int Status { get; set; }
     public long TotalSize { get; set; }
@@ -243,7 +245,10 @@ public class DispatchedEpisode : IEntity
 public class PendingLargeTorrent : IEntity
 {
     public int Id { get; set; }
+    /// <summary>Transmission session id. Renumbered on its restart — kept only to read old rows;
+    /// every action resolves through <see cref="Hash"/>.</summary>
     public int TorrentId { get; set; }
+    public string Hash { get; set; } = "";
     public string TorrentName { get; set; } = "";
     public long TotalSize { get; set; }
     public DateTime AddedDate { get; set; }

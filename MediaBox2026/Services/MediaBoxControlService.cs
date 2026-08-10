@@ -259,6 +259,42 @@ public class MediaBoxControlService(
 		}
 	}
 
+	/// <summary>
+	/// Stop/start one torrent for Tower's downloads page. The hash is what Tower holds, and
+	/// Transmission accepts it in "ids" directly, so nothing has to resolve a session id that
+	/// may have been renumbered since the page last rendered.
+	/// </summary>
+	public override Task<RunResult> PauseTorrent(TorrentRef request, ServerCallContext context) =>
+		SetTorrentPausedAsync(request.Hash, pause: true, context.CancellationToken);
+
+	public override Task<RunResult> ResumeTorrent(TorrentRef request, ServerCallContext context) =>
+		SetTorrentPausedAsync(request.Hash, pause: false, context.CancellationToken);
+
+	private async Task<RunResult> SetTorrentPausedAsync(string hash, bool pause, CancellationToken ct)
+	{
+		var verb = pause ? "pause" : "resume";
+		try
+		{
+			if (string.IsNullOrWhiteSpace(hash))
+				return new RunResult { Ok = false, Message = "No torrent given." };
+
+			var ok = pause
+				? await transmission.PauseTorrentAsync(hash, ct)
+				: await transmission.ResumeTorrentAsync(hash, ct);
+
+			if (!ok)
+				return new RunResult { Ok = false, Message = $"Transmission refused to {verb} that torrent." };
+
+			state.AddActivity($"Torrent {verb}d via Tower: {hash[..Math.Min(8, hash.Length)]}");
+			return new RunResult { Ok = true, Message = pause ? "Paused." : "Resumed." };
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC {Verb}Torrent failed for {Hash}", verb, hash);
+			return new RunResult { Ok = false, Message = ex.Message };
+		}
+	}
+
 	/// <summary>Mirrors MovieWatchlistService's per-cycle work (WatchlistCheck -> RunOnceAsync).</summary>
 	public override async Task<RunResult> WatchlistCheck(Empty request, ServerCallContext context)
 	{
@@ -327,7 +363,9 @@ public class MediaBoxControlService(
 					Percent = tor.PercentDone * 100,
 					Status = tor.StatusText,
 					SizeBytes = tor.TotalSize,
-					RateDown = tor.RateDownload
+					RateDown = tor.RateDownload,
+					Hash = tor.HashString,
+					Paused = tor.Status == 0
 				});
 			}
 			return result;
