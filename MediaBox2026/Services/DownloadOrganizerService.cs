@@ -205,7 +205,12 @@ public class DownloadOrganizerService(
         logger.LogInformation("📂 Folder parse result: CleanName='{CleanName}', Year={Year}, IsTvShow={IsTvShow}, Quality='{Quality}'",
             folderParsed.CleanName, folderParsed.Year, folderParsed.IsTvShow, folderParsed.Quality);
 
-        var allFiles = Directory.GetFiles(dirPath, "*.*", SearchOption.AllDirectories);
+        // Media first, subtitles after. A subtitle is not allowed to create a destination folder
+        // (see MoveMovieFileAsync/MoveTvFileAsync), so it has to be moved *after* the video that
+        // establishes one — in Directory.GetFiles order it could arrive first and go to Unknown.
+        var allFiles = Directory.GetFiles(dirPath, "*.*", SearchOption.AllDirectories)
+            .OrderBy(f => FileNameParser.IsSubtitleFile(f) ? 1 : 0)
+            .ToArray();
         var hasMediaFiles = false;
 
         foreach (var file in allFiles)
@@ -259,7 +264,12 @@ public class DownloadOrganizerService(
         {
             // Use folder name when the file name doesn't carry a meaningful clean name
             // (e.g., a generic name like "movie.mkv" or the folder name is richer)
+            // A subtitle's filename describes a language, not a title — "Bahasa Indonesia.ind.srt",
+            // "SDH.eng.HI.srt". Inside a torrent folder the folder is always the better source, and
+            // taking the file's own name while borrowing only the folder's *year* is what produced
+            // "Bahasa Indonesia (2026)" as a film (issue #5).
             bool fileNameIsWeak = string.IsNullOrWhiteSpace(fileParsed.CleanName)
+                || FileNameParser.IsSubtitleFile(fileName)
                 || fileParsed.CleanName.Equals(Path.GetFileNameWithoutExtension(fileName), StringComparison.OrdinalIgnoreCase)
                 || fileParsed.CleanName.Length < folderHint.CleanName.Length;
 
@@ -341,6 +351,12 @@ public class DownloadOrganizerService(
                 baseDir = existingFolder;
                 logger.LogDebug("Using existing folder (case-insensitive match): {Folder}", Path.GetFileName(existingFolder));
             }
+            else if (FileNameParser.IsSubtitleFile(filePath))
+            {
+                logger.LogInformation("📝 Subtitle with no matching show, sending to Unknown: {File}", Path.GetFileName(filePath));
+                MoveToUnknown(filePath, config);
+                return;
+            }
             else
             {
                 baseDir = Path.Combine(config.TvShowsPath, folderName);
@@ -399,6 +415,15 @@ public class DownloadOrganizerService(
             {
                 destDir = existingFolder;
                 logger.LogDebug("Using existing folder (case-insensitive match): {Folder}", Path.GetFileName(existingFolder));
+            }
+            else if (FileNameParser.IsSubtitleFile(filePath))
+            {
+                // A subtitle carrying no video must never mint a movie folder from its own filename.
+                // "SDH.eng.HI.srt" parses as the film "Sdh Eng Hi", which is how 19 folders named
+                // after subtitle languages appeared under Movies (issue #5).
+                logger.LogInformation("📝 Subtitle with no matching video, sending to Unknown: {File}", Path.GetFileName(filePath));
+                MoveToUnknown(filePath, config);
+                return;
             }
             else
             {
