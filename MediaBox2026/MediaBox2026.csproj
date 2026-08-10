@@ -19,7 +19,15 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.5" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
+    <!--
+      Direct reference purely to lift the transitive SQLitePCLRaw off 2.1.11, which carries
+      GHSA-2m69-gcr7-jv3q. Microsoft.Data.Sqlite still pins 2.1.11 even at 10.0.10, so bumping it
+      alone does not clear the advisory. Held at 2.1.12 rather than 3.0.x: same major/minor as what
+      Microsoft.Data.Sqlite expects, so no ABI surprise in the provider it loads at runtime.
+      Remove when Microsoft.Data.Sqlite ships against a patched version by itself.
+    -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
   </ItemGroup>
