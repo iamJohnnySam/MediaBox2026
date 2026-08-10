@@ -35,4 +35,8 @@ Debug.Assert(FileNameParser.FuzzyMatch("The Good Dinosaur", "Good Dinosaur") > 0
 Debug.Assert(MovieWatchlistService.Resolution("1080p") < MovieWatchlistService.Resolution("2160p"));
 Debug.Assert(MovieWatchlistService.Resolution("2160p") < MovieWatchlistService.Resolution("3D"));
 
+// new-download announcements report MB under a GB, GB at or above it
+Debug.Assert(TransmissionMonitorService.FormatSize(714_663_936) == "682 MB");
+Debug.Assert(TransmissionMonitorService.FormatSize(1_594_641_057) == "1.49 GB");
+
 Console.WriteLine("ok");

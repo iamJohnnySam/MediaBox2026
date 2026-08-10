@@ -14,6 +14,11 @@ public class TransmissionMonitorService(
     private int _consecutiveFailures = 0;
     private const int MaxConsecutiveFailures = 5;
 
+    // Torrent ids already announced. Pruned to the live set each cycle, so it cannot grow.
+    // ponytail: in-memory, and Transmission renumbers ids across its own restarts — worst case a
+    // torrent added in the last few minutes is announced twice. Persist only if that shows up.
+    private readonly HashSet<int> _announced = [];
+
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         logger.LogInformation("💾 Transmission monitor waiting for Telegram readiness...");
@@ -145,6 +150,21 @@ public class TransmissionMonitorService(
             }
         }
 
+        // Announce each newly added torrent once, whoever added it — the RSS monitor, the watchlist,
+        // the episode guide, or a magnet dropped into Transmission by hand. Over-threshold ones are
+        // deliberately excluded: they get their own approval prompt just below, which says more.
+        _announced.IntersectWith(torrents.Select(t => t.Id));
+        foreach (var torrent in torrents.Where(t =>
+                     t.TotalSize <= oneGigabyte && t.DateAdded > 0 && (now - t.DateAdded) <= recentWindow))
+        {
+            if (!_announced.Add(torrent.Id)) continue;
+
+            logger.LogInformation("📥 Announcing new torrent: {Name} ({Size} bytes)", torrent.Name, torrent.TotalSize);
+            await telegram.SendMessageAsync(
+                $"📥 Download started\n\n📦 {torrent.Name}\n📊 Size: {FormatSize(torrent.TotalSize)}", ct);
+            state.AddActivity($"Download started: {torrent.Name}");
+        }
+
         // Check pending large torrents and ask for approval if not yet asked
         await CheckPendingLargeTorrentsAsync(ct);
 
@@ -170,6 +190,10 @@ public class TransmissionMonitorService(
             state.NotifyChange();
         }
     }
+
+    public static string FormatSize(long bytes) => bytes >= 1_073_741_824
+        ? $"{bytes / 1_073_741_824.0:N2} GB"
+        : $"{bytes / 1_048_576.0:N0} MB";
 
     // Re-ask an unanswered prompt after this long. Cycle-based (not an in-memory timer) so it
     // survives service restarts — otherwise AskedUser records orphan forever when the process dies.
