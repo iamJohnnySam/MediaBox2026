@@ -26,6 +26,11 @@ Debug.Assert(!FileNameParser.IsQualityAcceptable("Angry Birds (2016) [3D] [HSBS]
 Debug.Assert(FileNameParser.IsQualityAcceptable("480p"));
 Debug.Assert(FileNameParser.IsQualityAcceptable(null));  // unknown stays acceptable
 
+// A sequel scores 0.90 against its predecessor — above FindMovie's 0.6 — so the
+// "already in library" watchlist guard must gate on the year, never on the name alone.
+Debug.Assert(FileNameParser.FuzzyMatch("The Angry Birds Movie", "The Angry Birds Movie 2") > 0.6);
+Debug.Assert(FileNameParser.FuzzyMatch("The Good Dinosaur", "Good Dinosaur") > 0.6);
+
 // fallback picks the smallest above-standard release; "3D" sorts last
 Debug.Assert(MovieWatchlistService.Resolution("1080p") < MovieWatchlistService.Resolution("2160p"));
 Debug.Assert(MovieWatchlistService.Resolution("2160p") < MovieWatchlistService.Resolution("3D"));

@@ -6,6 +6,7 @@ namespace MediaBox2026.Services;
 
 public class MovieWatchlistService(
     MediaDatabase db,
+    MediaCatalogService catalog,
     TransmissionClient transmission,
     ITelegramNotifier telegram,
     MediaBoxState state,
@@ -124,6 +125,38 @@ public class MovieWatchlistService(
             processedCount++;
             try
             {
+                // Already on disk — nothing to fetch. Checked every cycle rather than only at add
+                // time, because the film can land from any other release (or by hand) afterwards;
+                // that is how a watchlist item outlived a copy already sitting in the library.
+                var owned = catalog.FindMovie(item.Name, item.Year);
+
+                // FindMovie's 0.6 fuzzy threshold scores "The Angry Birds Movie" against
+                // "The Angry Birds Movie 2" at 0.90 — fine for filing a downloaded file, far too
+                // loose for silently cancelling a download, since a sequel differs by exactly that
+                // one trailing token. So the year has to agree (FindMovie already filters on it
+                // when known), or the title has to match outright.
+                // ponytail: a yearless item therefore still needs an exact title; it falls through
+                // to the search and may re-fetch a film already held. Failing that way round is the
+                // safe one — resolve the year on add if that ever becomes the common case.
+                if (owned != null && !item.Year.HasValue &&
+                    !string.Equals(owned.Name, item.Name, StringComparison.OrdinalIgnoreCase))
+                    owned = null;
+
+                if (owned != null)
+                {
+                    logger.LogInformation("📚 '{Name}' already in library as '{Owned}' ({Year}) — closing watchlist item, nothing searched",
+                        item.Name, owned.Name, owned.Year);
+                    item.Status = WatchlistStatus.Downloaded;
+                    if (!item.Year.HasValue) item.Year = owned.Year;
+                    db.Watchlist.Update(item);
+                    state.WatchlistCount = db.Watchlist.Count(w => w.Status == WatchlistStatus.Pending);
+                    state.NotifyChange();
+                    await telegram.SendMessageAsync(
+                        $"📚 Already in library: {owned.Name}{(owned.Year.HasValue ? $" ({owned.Year})" : "")}\n\n" +
+                        $"Removed from watchlist — nothing downloaded.", ct);
+                    continue;
+                }
+
                 // Rate limiting
                 var timeSinceLastCall = DateTime.UtcNow - _lastApiCall;
                 if (timeSinceLastCall.TotalMilliseconds < MinApiCallIntervalMs)
