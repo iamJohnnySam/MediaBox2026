@@ -314,6 +314,45 @@ public class DownloadOrganizerService(
         }
     }
 
+    /// <summary>
+    /// A subtitle named after its video, keeping its original name as the distinguishing tail:
+    /// "The.Office.S01E03.mkv" + "3_English.srt" -> "The.Office.S01E03.3_English.srt".
+    ///
+    /// Jellyfin associates an external subtitle by the video's filename stem and reads the trailing
+    /// tokens as language/flags, so this is what makes it load at all — "3_English.srt" matches
+    /// nothing. Keeping the original tail rather than mapping it to a language code costs no lookup
+    /// table and keeps two subtitles for one episode distinct, which is what the (1)/(2) collision
+    /// suffixes destroyed: they were unrecoverable once several episodes shared a folder (issue #6).
+    /// </summary>
+    public static string BuildSubtitleName(string videoFileName, string subtitleFileName) =>
+        Path.GetFileNameWithoutExtension(videoFileName) + "." +
+        Path.GetFileNameWithoutExtension(subtitleFileName) +
+        Path.GetExtension(subtitleFileName);
+
+    /// <summary>
+    /// The video in <paramref name="dir"/> a subtitle belongs to, or null. For an episode it must be
+    /// the same season+episode; for a film the largest media file, which is the feature rather than a
+    /// sample or an extra.
+    /// </summary>
+    private static string? FindVideoFor(string dir, int? season, int? episode)
+    {
+        if (!Directory.Exists(dir)) return null;
+
+        var videos = Directory.GetFiles(dir)
+            .Where(FileNameParser.IsMediaFile)
+            .ToList();
+        if (videos.Count == 0) return null;
+
+        if (season.HasValue && episode.HasValue)
+            return videos.FirstOrDefault(v =>
+            {
+                var p = FileNameParser.Parse(Path.GetFileName(v));
+                return p.Season == season && p.Episode == episode;
+            });
+
+        return videos.OrderByDescending(v => new FileInfo(v).Length).First();
+    }
+
     private async Task MoveTvShowFileAsync(string filePath, ParsedMediaInfo parsed, MediaBoxSettings config, CancellationToken ct)
     {
         var show = catalog.FindTvShow(parsed.CleanName, parsed.Year);
@@ -368,7 +407,21 @@ public class DownloadOrganizerService(
         var seasonDir = Path.Combine(baseDir, $"Season {parsed.Season!.Value:D2}");
         Directory.CreateDirectory(seasonDir);
 
-        var destPath = Path.Combine(seasonDir, Path.GetFileName(filePath));
+        var destName = Path.GetFileName(filePath);
+        if (FileNameParser.IsSubtitleFile(filePath))
+        {
+            var video = FindVideoFor(seasonDir, parsed.Season, parsed.Episode);
+            if (video == null)
+            {
+                logger.LogInformation("📝 No S{Season:D2}E{Episode:D2} video to attach subtitle to, sending to Unknown: {File}",
+                    parsed.Season!.Value, parsed.Episode ?? 0, destName);
+                MoveToUnknown(filePath, config);
+                return;
+            }
+            destName = BuildSubtitleName(Path.GetFileName(video), destName);
+        }
+
+        var destPath = Path.Combine(seasonDir, destName);
         if (File.Exists(destPath))
             destPath = GetUniquePath(destPath);
 
@@ -433,7 +486,21 @@ public class DownloadOrganizerService(
             }
         }
 
-        var destPath = Path.Combine(destDir, Path.GetFileName(filePath));
+        var destName = Path.GetFileName(filePath);
+        if (FileNameParser.IsSubtitleFile(filePath))
+        {
+            var video = FindVideoFor(destDir, null, null);
+            if (video == null)
+            {
+                logger.LogInformation("📝 No video in {Folder} to attach subtitle to, sending to Unknown: {File}",
+                    Path.GetFileName(destDir), destName);
+                MoveToUnknown(filePath, config);
+                return;
+            }
+            destName = BuildSubtitleName(Path.GetFileName(video), destName);
+        }
+
+        var destPath = Path.Combine(destDir, destName);
         if (File.Exists(destPath))
             destPath = GetUniquePath(destPath);
 

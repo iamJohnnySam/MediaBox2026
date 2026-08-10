@@ -43,6 +43,16 @@ Debug.Assert(FileNameParser.Parse("Angry.Birds.2016.1080p.BluRay.6CH.ShAaNiG.mkv
 Debug.Assert(!FileNameParser.Parse("The Grand Tour 2016 Seasons 1 to 5 Complete 720p WEB x264 [i_c]").IsTvShow);
 Debug.Assert(FileNameParser.Parse("Futurama.S14E03.480p.x264-mSD[EZTVx.to].mkv").IsTvShow);
 
+// A subtitle is renamed onto its video's stem, keeping its own name as the tail — that prefix is
+// what makes Jellyfin associate it, and the tail is what keeps two subs for one episode distinct.
+Debug.Assert(DownloadOrganizerService.BuildSubtitleName("The.Office.S01E03.mkv", "3_English.srt")
+             == "The.Office.S01E03.3_English.srt");
+Debug.Assert(DownloadOrganizerService.BuildSubtitleName("Angry.Birds.2016.1080p.mkv", "SDH.eng.HI.srt")
+             == "Angry.Birds.2016.1080p.SDH.eng.HI.srt");
+// two different subs for one video stay different files rather than colliding into (1)
+Debug.Assert(DownloadOrganizerService.BuildSubtitleName("Ep.mkv", "3_English.srt")
+          != DownloadOrganizerService.BuildSubtitleName("Ep.mkv", "4_English.srt"));
+
 // planned downloads: the window opens on the configured day+hour, once per calendar month
 var day14 = new DateTime(2026, 8, 14, 9, 0, 0);
 Debug.Assert(TransmissionMonitorService.IsPromptDue(day14, 14, 8, null));
