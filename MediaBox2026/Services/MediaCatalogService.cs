@@ -31,6 +31,8 @@ public class MediaCatalogService(
             logger.LogInformation("Step 3/3: Scanning YouTube videos...");
             ScanYouTube();
 
+            PruneVanishedFolders();
+
             state.LastMediaScan = DateTime.Now;
             state.TvShowCount = db.TvShows.Count();
             state.MovieCount = db.Movies.Count();
@@ -392,6 +394,51 @@ public class MediaCatalogService(
 
             logger.LogInformation("🪦 Episode deleted from disk, tombstoned so it won't re-download: {Show} S{Season}E{Episode}",
                 show.Name, season, episode);
+        }
+    }
+
+    /// <summary>
+    /// Drops rows whose folder is no longer on disk. The scans only ever insert or update, so a title
+    /// deleted by hand stayed in the library forever — showing a card for media that isn't there, which
+    /// can never have cover art because there is no folder to hold it.
+    ///
+    /// <b>The root check is load-bearing.</b> /molecule is a mounted volume: if it is unmounted or the
+    /// share is down, every configured path reads as missing and an unguarded prune would empty the
+    /// whole library in one pass. A missing root means "cannot tell", not "nothing exists", so it skips.
+    /// </summary>
+    private void PruneVanishedFolders()
+    {
+        var tv = settings.CurrentValue.TvShowsPath;
+        var movies = settings.CurrentValue.MoviesPath;
+
+        if (Directory.Exists(tv))
+        {
+            var gone = db.TvShows.FindAll().Where(s => !Directory.Exists(s.FolderPath)).ToList();
+            foreach (var show in gone)
+            {
+                logger.LogInformation("🗑️ Removing TV show whose folder is gone: {Name} ({Path})", show.Name, show.FolderPath);
+                db.TvShows.DeleteMany(s => s.Id == show.Id);
+            }
+            if (gone.Count > 0) state.AddActivity($"Pruned {gone.Count} missing TV show(s) from the library");
+        }
+        else
+        {
+            logger.LogWarning("Skipping TV prune: {Path} is not reachable (unmounted?)", tv);
+        }
+
+        if (Directory.Exists(movies))
+        {
+            var gone = db.Movies.FindAll().Where(m => !Directory.Exists(m.FolderPath)).ToList();
+            foreach (var movie in gone)
+            {
+                logger.LogInformation("🗑️ Removing movie whose folder is gone: {Name} ({Path})", movie.Name, movie.FolderPath);
+                db.Movies.DeleteMany(m => m.Id == movie.Id);
+            }
+            if (gone.Count > 0) state.AddActivity($"Pruned {gone.Count} missing movie(s) from the library");
+        }
+        else
+        {
+            logger.LogWarning("Skipping movie prune: {Path} is not reachable (unmounted?)", movies);
         }
     }
 
