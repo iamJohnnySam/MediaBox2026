@@ -39,6 +39,8 @@ public class MediaBoxSettingsIo(
 			["QualityWaitHours"] = s.QualityWaitHours.ToString(),
 			["QualityAutoDownloadHours"] = s.QualityAutoDownloadHours.ToString(),
 			["YouTubeDownloadPaused"] = s.YouTubeDownloadPaused.ToString(),
+			["PlannedDownloadDayOfMonth"] = s.PlannedDownloadDayOfMonth.ToString(),
+			["PlannedDownloadHour"] = s.PlannedDownloadHour.ToString(),
 			["NewsSources"] = JsonSerializer.Serialize(s.NewsSources)
 		};
 		return values;
@@ -53,7 +55,8 @@ public class MediaBoxSettingsIo(
 		"TvShowsPath", "MoviesPath", "DownloadsPath", "YouTubePath", "UnknownPath",
 		"TransmissionRpcUrl", "TransmissionUsername", "JellyfinUrl", "RssFeedUrl",
 		"RssFeedCheckMinutes", "TransmissionCheckMinutes", "QualityWaitHours",
-		"QualityAutoDownloadHours", "YouTubeDownloadPaused", "NewsSources"
+		"QualityAutoDownloadHours", "YouTubeDownloadPaused", "NewsSources",
+		"PlannedDownloadDayOfMonth", "PlannedDownloadHour"
 	};
 
 	/// <summary>
@@ -170,6 +173,18 @@ public class MediaBoxSettingsIo(
 			case "QualityAutoDownloadHours":
 				if (!int.TryParse(rawValue, out var n)) return false;
 				writer.WriteNumber(key, n);
+				return true;
+
+			// Clamped rather than rejected: 0 disables, and 29-31 don't exist every month, so a
+			// typed 31 would silently never fire in February instead of running on the 28th.
+			case "PlannedDownloadDayOfMonth":
+				if (!int.TryParse(rawValue, out var day)) return false;
+				writer.WriteNumber(key, Math.Clamp(day, 0, 28));
+				return true;
+
+			case "PlannedDownloadHour":
+				if (!int.TryParse(rawValue, out var hour)) return false;
+				writer.WriteNumber(key, Math.Clamp(hour, 0, 23));
 				return true;
 
 			case "YouTubeDownloadPaused":

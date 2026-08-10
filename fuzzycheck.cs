@@ -35,6 +35,22 @@ Debug.Assert(FileNameParser.FuzzyMatch("The Good Dinosaur", "Good Dinosaur") > 0
 Debug.Assert(MovieWatchlistService.Resolution("1080p") < MovieWatchlistService.Resolution("2160p"));
 Debug.Assert(MovieWatchlistService.Resolution("2160p") < MovieWatchlistService.Resolution("3D"));
 
+// planned downloads: the window opens on the configured day+hour, once per calendar month
+var day14 = new DateTime(2026, 8, 14, 9, 0, 0);
+Debug.Assert(TransmissionMonitorService.IsPromptDue(day14, 14, 8, null));
+Debug.Assert(!TransmissionMonitorService.IsPromptDue(day14, 14, 8, new DateTime(2026, 8, 14, 8, 5, 0))); // already asked this month
+Debug.Assert(TransmissionMonitorService.IsPromptDue(day14, 14, 8, new DateTime(2026, 7, 14, 8, 5, 0)));  // last month -> due again
+Debug.Assert(!TransmissionMonitorService.IsPromptDue(new DateTime(2026, 8, 14, 7, 0, 0), 14, 8, null));  // before the hour
+Debug.Assert(!TransmissionMonitorService.IsPromptDue(new DateTime(2026, 8, 13, 9, 0, 0), 14, 8, null));  // wrong day
+Debug.Assert(!TransmissionMonitorService.IsPromptDue(day14, 0, 8, null));                                // 0 disables
+// a year apart on the same month must still be due, or it would skip after 12 months
+Debug.Assert(TransmissionMonitorService.IsPromptDue(day14, 14, 8, new DateTime(2025, 8, 14, 8, 5, 0)));
+
+// the window closes at midnight, not 24h later
+Debug.Assert(TransmissionMonitorService.ShouldRepark(new DateTime(2026, 8, 15, 0, 5, 0), new DateTime(2026, 8, 14, 23, 50, 0)));
+Debug.Assert(!TransmissionMonitorService.ShouldRepark(new DateTime(2026, 8, 14, 23, 59, 0), new DateTime(2026, 8, 14, 8, 0, 0)));
+Debug.Assert(!TransmissionMonitorService.ShouldRepark(new DateTime(2026, 8, 14, 9, 0, 0), null));
+
 // new-download announcements report MB under a GB, GB at or above it
 Debug.Assert(TransmissionMonitorService.FormatSize(714_663_936) == "682 MB");
 Debug.Assert(TransmissionMonitorService.FormatSize(1_594_641_057) == "1.49 GB");

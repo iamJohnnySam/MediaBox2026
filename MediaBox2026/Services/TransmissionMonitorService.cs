@@ -168,6 +168,7 @@ public class TransmissionMonitorService(
 
         // Check pending large torrents and ask for approval if not yet asked
         await CheckPendingLargeTorrentsAsync(torrents, ct);
+        await CheckPlannedDownloadsAsync(torrents, ct);
 
         var completed = torrents.Where(t => t.IsFinished).ToList();
         if (completed.Count > 0)
@@ -195,6 +196,155 @@ public class TransmissionMonitorService(
     public static string FormatSize(long bytes) => bytes >= 1_073_741_824
         ? $"{bytes / 1_073_741_824.0:N2} GB"
         : $"{bytes / 1_048_576.0:N0} MB";
+
+    /// <summary>
+    /// The planned-download window: torrents parked with "📅 Plan for later" wait for the configured
+    /// day of the month, get one prompt that morning, run for the rest of that local day if approved,
+    /// and are parked again at midnight if they haven't finished.
+    ///
+    /// Driven off the ordinary monitor cycle rather than its own timer, so it needs no scheduler and
+    /// survives restarts: everything it decides from is in the row and the clock, never in memory.
+    /// </summary>
+    private async Task CheckPlannedDownloadsAsync(List<TorrentInfo> torrents, CancellationToken ct)
+    {
+        var cfg = settings.CurrentValue;
+        var planned = db.PendingLargeTorrents.Find(p => p.Status == LargeTorrentStatus.Planned).ToList();
+        if (planned.Count == 0) return;
+
+        var localNow = DateTime.Now;
+        var live = torrents.ToDictionary(t => t.HashString, StringComparer.OrdinalIgnoreCase);
+
+        // ── Close the window: anything still running from a previous local day gets parked again.
+        foreach (var item in planned.Where(p => ShouldRepark(localNow, p.ResumedAt)))
+        {
+            item.ResumedAt = null;
+            db.PendingLargeTorrents.Update(item);
+
+            // Finished torrents are removed (and their row deleted) by the completed-torrent pass, so
+            // reaching here means it did not finish inside its day.
+            if (!live.TryGetValue(item.Hash, out var tor)) continue;
+            await transmission.PauseTorrentAsync(item.Hash, ct);
+
+            logger.LogInformation("📅 Planned download did not finish in its day, re-parked: {Name} ({Pct:P0})",
+                item.TorrentName, tor.PercentDone);
+
+            var callbackId = Guid.NewGuid().ToString("N")[..8];
+            var tcs = new TaskCompletionSource<string>();
+            telegram.PendingCallbacks[callbackId] = tcs;
+
+            var msgId = await telegram.SendInlineKeyboardAsync(
+                $"⏸️ Planned download stopped — it couldn't finish in the day\n\n" +
+                $"📦 {item.TorrentName}\n" +
+                $"📊 {tor.PercentDone:P0} of {FormatSize(item.TotalSize)}\n\n" +
+                $"Resume it now, or keep waiting for next month?",
+                [
+                    [
+                        new InlineButton { Text = "▶️ Resume now", CallbackData = $"{callbackId}:resume" },
+                        new InlineButton { Text = "⏳ Keep waiting", CallbackData = $"{callbackId}:wait" }
+                    ]
+                ], ct);
+
+            WatchPlannedReply(item, callbackId, tcs, msgId, ct);
+        }
+
+        if (cfg.PlannedDownloadDayOfMonth is <= 0) return;
+
+        // ── Open the window: one prompt on the configured day, once per month.
+        // Comparing month-of-year, not a 30-day gap, is what keeps this on "the same day next month".
+        var due = planned.Where(p =>
+                p.ResumedAt is null &&
+                IsPromptDue(localNow, cfg.PlannedDownloadDayOfMonth, cfg.PlannedDownloadHour, p.LastPlannedPromptAt) &&
+                live.ContainsKey(p.Hash))
+            .ToList();
+        if (due.Count == 0) return;
+
+        logger.LogInformation("📅 Planned download day — prompting for {Count} torrent(s)", due.Count);
+
+        foreach (var item in due)
+        {
+            item.LastPlannedPromptAt = localNow;
+            db.PendingLargeTorrents.Update(item);
+
+            var callbackId = Guid.NewGuid().ToString("N")[..8];
+            var tcs = new TaskCompletionSource<string>();
+            telegram.PendingCallbacks[callbackId] = tcs;
+
+            var msgId = await telegram.SendInlineKeyboardAsync(
+                $"📅 Planned download day\n\n" +
+                $"📦 {item.TorrentName}\n" +
+                $"📊 Size: {FormatSize(item.TotalSize)}\n\n" +
+                $"Start it for the rest of today?",
+                [
+                    [
+                        new InlineButton { Text = "▶️ Start now", CallbackData = $"{callbackId}:resume" },
+                        new InlineButton { Text = "⏳ Keep waiting", CallbackData = $"{callbackId}:wait" }
+                    ]
+                ], ct);
+
+            WatchPlannedReply(item, callbackId, tcs, msgId, ct);
+        }
+    }
+
+    /// <summary>
+    /// True once the local clock has reached the configured day and hour and no prompt has gone out
+    /// in this calendar month. Comparing month-and-year rather than an elapsed-days gap is what makes
+    /// it land on "the same day of the next month" regardless of month length.
+    /// </summary>
+    public static bool IsPromptDue(DateTime localNow, int dayOfMonth, int hour, DateTime? lastPrompt)
+    {
+        if (dayOfMonth <= 0) return false;
+        if (localNow.Day != dayOfMonth || localNow.Hour < hour) return false;
+        return lastPrompt is null ||
+               lastPrompt.Value.Month != localNow.Month ||
+               lastPrompt.Value.Year != localNow.Year;
+    }
+
+    /// <summary>
+    /// True when a running planned torrent has crossed midnight and must be parked again. Compares
+    /// calendar dates, not elapsed hours: the rule is "within the day", so a window opened at 23:50
+    /// closes ten minutes later rather than granting a rolling 24 hours.
+    /// </summary>
+    public static bool ShouldRepark(DateTime localNow, DateTime? resumedAt) =>
+        resumedAt.HasValue && resumedAt.Value.Date < localNow.Date;
+
+    /// <summary>
+    /// Waits for one planned-download reply. "resume" opens the window (stays Planned, so it is
+    /// re-parked at midnight if it overruns); "wait" or a timeout leaves it parked for next month.
+    /// </summary>
+    private void WatchPlannedReply(PendingLargeTorrent item, string callbackId,
+        TaskCompletionSource<string> tcs, int? messageId, CancellationToken ct)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromHours(ReAskAfterHours));
+                var reply = await tcs.Task.WaitAsync(cts.Token);
+                telegram.PendingCallbacks.TryRemove(callbackId, out _);
+
+                if (reply != "resume")
+                {
+                    if (messageId.HasValue)
+                        await telegram.EditMessageAsync(messageId.Value,
+                            $"⏳ Still waiting\n\n📦 {item.TorrentName}\n\nParked until the next planned day.", ct);
+                    return;
+                }
+
+                if (!await transmission.ResumeTorrentAsync(item.Hash, ct)) return;
+
+                item.ResumedAt = DateTime.Now;
+                db.PendingLargeTorrents.Update(item);
+                if (messageId.HasValue)
+                    await telegram.EditMessageAsync(messageId.Value,
+                        $"▶️ Downloading\n\n📦 {item.TorrentName}\n\nRuns until midnight, then parks again if unfinished.", ct);
+                state.AddActivity($"Planned download started: {item.TorrentName}");
+            }
+            catch
+            {
+                telegram.PendingCallbacks.TryRemove(callbackId, out _);
+            }
+        }, ct);
+    }
 
     // Re-ask an unanswered prompt after this long. Cycle-based (not an in-memory timer) so it
     // survives service restarts — otherwise AskedUser records orphan forever when the process dies.
@@ -262,6 +412,9 @@ public class TransmissionMonitorService(
                     [
                         new InlineButton { Text = "✅ Resume", CallbackData = $"{callbackId}:resume" },
                         new InlineButton { Text = "❌ Cancel", CallbackData = $"{callbackId}:cancel" }
+                    ],
+                    [
+                        new InlineButton { Text = "📅 Plan for later", CallbackData = $"{callbackId}:plan" }
                     ]
                 ], ct);
 
@@ -290,6 +443,21 @@ public class TransmissionMonitorService(
                                 await telegram.SendMessageAsync($"✅ Resumed download: {item.TorrentName}", ct);
                             state.AddActivity($"Large torrent approved: {item.TorrentName}");
                         }
+                    }
+                    else if (result == "plan")
+                    {
+                        // Stays paused exactly as it is; only the bookkeeping changes. Planned rows
+                        // are outside the Paused re-ask filter, so this also ends the 24h nagging.
+                        item.Status = LargeTorrentStatus.Planned;
+                        var when = settings.CurrentValue.PlannedDownloadDayOfMonth is > 0 and var d
+                            ? $"day {d} of the month"
+                            : "a day that is not configured yet (set PlannedDownloadDayOfMonth)";
+                        if (messageId.HasValue)
+                            await telegram.EditMessageAsync(messageId.Value,
+                                $"📅 Planned\n\n📦 {item.TorrentName}\n\nStaying paused until {when}.", ct);
+                        else
+                            await telegram.SendMessageAsync($"📅 Planned for later: {item.TorrentName}", ct);
+                        state.AddActivity($"Large torrent planned: {item.TorrentName}");
                     }
                     else
                     {

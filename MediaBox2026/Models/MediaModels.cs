@@ -213,6 +213,16 @@ public class MediaBoxSettings
     // higher-quality file (<=1080p only; 4K/2160p still waits for user approval) and dismiss the prompt.
     public int QualityAutoDownloadHours { get; set; } = 6;
     public int MediaScanHours { get; set; } = 12;
+
+    /// <summary>
+    /// Day of the month the planned-download window opens (1-28; 0 disables). Sits near the end of
+    /// the broadband package, when leftover quota is about to expire. Capped at 28 so it exists in
+    /// February — a 31 would silently skip the short months.
+    /// </summary>
+    public int PlannedDownloadDayOfMonth { get; set; } = 0;
+
+    /// <summary>Local hour (0-23) the prompt goes out on that day.</summary>
+    public int PlannedDownloadHour { get; set; } = 8;
     public bool YouTubeDownloadPaused { get; set; } = false;
 
     // Tower gRPC bridge (off by default — MediaBox uses its local bot when false)
@@ -256,13 +266,26 @@ public class PendingLargeTorrent : IEntity
     public DateTime? LastAsked { get; set; }
     public int? TelegramMessageId { get; set; }
     public LargeTorrentStatus Status { get; set; } = LargeTorrentStatus.Paused;
+
+    /// <summary>
+    /// Set while a Planned torrent is inside its allowed day, null whenever it is parked. Its local
+    /// date is what "did it finish within the day" is measured against, so a window that opens at
+    /// 23:50 closes at midnight — matching the stated rule rather than granting a rolling 24h.
+    /// </summary>
+    public DateTime? ResumedAt { get; set; }
+
+    /// <summary>Last time the monthly prompt went out for this torrent. Per-row rather than one
+    /// global marker: with no planned torrents there is nothing to prompt about anyway.</summary>
+    public DateTime? LastPlannedPromptAt { get; set; }
 }
 
 public enum LargeTorrentStatus
 {
     Paused,
     Approved,
-    Rejected
+    Rejected,
+    /// <summary>Parked until the billing-cycle day. Deliberately excluded from the 24h re-ask.</summary>
+    Planned
 }
 
 public class LogEntry
