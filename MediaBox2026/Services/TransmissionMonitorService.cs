@@ -368,6 +368,26 @@ public class TransmissionMonitorService(
     // survives service restarts — otherwise AskedUser records orphan forever when the process dies.
     private const int ReAskAfterHours = 24;
 
+    /// <summary>
+    /// Rows to drop so that one torrent has exactly one row. Transmission dedupes by info hash, so
+    /// two rows sharing a hash are two prompts for one download: answering either leaves the other
+    /// re-asking every <see cref="ReAskAfterHours"/> forever. That is what nagged about The Grand Tour
+    /// pack for three days after it had already been answered — the pair predates hashes being stored,
+    /// and the name backfill gave both rows the same hash.
+    ///
+    /// A hash is decided the moment any of its rows leaves Paused, so the Paused twins go. A hash
+    /// nobody has decided keeps its oldest row, which is the one carrying the live prompt.
+    /// </summary>
+    public static List<int> DuplicateRowIds(IEnumerable<PendingLargeTorrent> rows) =>
+        rows.Where(r => r.Hash.Length > 0)
+            .GroupBy(r => r.Hash, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .SelectMany(g => g.Any(r => r.Status != LargeTorrentStatus.Paused)
+                ? g.Where(r => r.Status == LargeTorrentStatus.Paused)
+                : g.OrderBy(r => r.Id).Skip(1))
+            .Select(r => r.Id)
+            .ToList();
+
     private async Task CheckPendingLargeTorrentsAsync(List<TorrentInfo> torrents, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
@@ -381,6 +401,12 @@ public class TransmissionMonitorService(
             legacy.Hash = match.HashString;
             db.PendingLargeTorrents.Update(legacy);
             logger.LogInformation("Backfilled hash for pending large torrent: {Name}", legacy.TorrentName);
+        }
+
+        foreach (var id in DuplicateRowIds(db.PendingLargeTorrents.FindAll()))
+        {
+            logger.LogInformation("Dropping duplicate pending large torrent row {Id}", id);
+            db.PendingLargeTorrents.DeleteMany(p => p.Id == id);
         }
 
         // A row whose torrent is no longer in Transmission has nothing left to approve; without this
