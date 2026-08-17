@@ -4,6 +4,13 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!--
+      Sdk.Web defaults Server GC on: one heap per core, sized for a box that has itself to spare.
+      Atom is 4 cores / 3.6 GB running six .NET apps plus Jellyfin, Postgres and Samba. Workstation
+      GC roughly halved Tower's idle heap (iamJohnnySam/Tower@599b382) at no latency cost here.
+    -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>
