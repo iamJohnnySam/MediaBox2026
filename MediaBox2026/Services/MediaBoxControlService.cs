@@ -23,6 +23,7 @@ public class MediaBoxControlService(
 	MovieWatchlistService watchlist,
 	EpisodeGuideService episodeGuide,
 	MediaBoxState state,
+	ITelegramNotifier telegram,
 	MediaDatabase db,
 	MediaBoxSettingsIo settingsIo,
 	IOptionsMonitor<MediaBoxSettings> settings,
@@ -902,5 +903,75 @@ public class MediaBoxControlService(
 			logger.LogError(ex, "gRPC UpdateSettings mutation failed");
 			return Task.FromResult(new RunResult { Ok = false, Message = ex.Message });
 		}
+	}
+
+	// Per-torrent removal and the approval prompts — the two things Tower could not do while the
+	// inline keyboards were the only way to answer MediaBox.
+
+	/// <summary>Removes the transfer from Transmission. Bytes already on disk are left alone.</summary>
+	public override async Task<RunResult> RemoveTorrent(TorrentRef request, ServerCallContext context)
+	{
+		try
+		{
+			if (string.IsNullOrWhiteSpace(request.Hash))
+				return new RunResult { Ok = false, Message = "No torrent given." };
+
+			// deleteData: false, like the already-in-library skip — a button on a page must never
+			// delete media, only stop fetching it.
+			await transmission.RemoveTorrentAsync(request.Hash, deleteData: false, context.CancellationToken);
+
+			state.AddActivity($"Torrent removed via Tower: {request.Hash[..Math.Min(8, request.Hash.Length)]}");
+			return new RunResult { Ok = true, Message = "Removed. Files on disk untouched." };
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "gRPC RemoveTorrent failed for {Hash}", request.Hash);
+			return new RunResult { Ok = false, Message = ex.Message };
+		}
+	}
+
+	/// <summary>
+	/// The prompts still waiting on an answer. PendingCallbacks — not the registry — decides what is
+	/// still answerable, so a prompt answered from Telegram, or lost to a restart, drops out here too.
+	/// </summary>
+	public override Task<PromptList> GetPrompts(Empty request, ServerCallContext context)
+	{
+		var list = new PromptList();
+		foreach (var p in state.OpenPrompts.Values.OrderBy(p => p.AskedAt))
+		{
+			if (!telegram.PendingCallbacks.ContainsKey(p.Id))
+			{
+				state.OpenPrompts.TryRemove(p.Id, out _);
+				continue;
+			}
+
+			var item = new Prompt
+			{
+				Id = p.Id,
+				Text = p.Text,
+				AskedUnix = new DateTimeOffset(p.AskedAt).ToUnixTimeSeconds()
+			};
+			item.Options.AddRange(p.Options.Select(o => new PromptOption { Label = o.Label, Value = o.Value }));
+			list.Items.Add(item);
+		}
+		return Task.FromResult(list);
+	}
+
+	/// <summary>
+	/// Answers a prompt exactly as tapping its Telegram button would: the value goes into the same
+	/// TaskCompletionSource, so the resume/cancel/plan work and the message edit are the existing
+	/// code, not a second copy of it.
+	/// </summary>
+	public override Task<RunResult> AnswerPrompt(PromptAnswer request, ServerCallContext context)
+	{
+		if (!telegram.PendingCallbacks.TryGetValue(request.Id, out var tcs))
+			return Task.FromResult(new RunResult { Ok = false, Message = "That prompt is no longer waiting for an answer." });
+
+		if (!tcs.TrySetResult(request.Value))
+			return Task.FromResult(new RunResult { Ok = false, Message = "Already answered." });
+
+		state.OpenPrompts.TryRemove(request.Id, out _);
+		state.AddActivity($"Prompt answered via Tower: {request.Value}");
+		return Task.FromResult(new RunResult { Ok = true, Message = "Answered." });
 	}
 }

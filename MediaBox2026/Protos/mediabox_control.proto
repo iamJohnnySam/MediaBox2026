@@ -36,6 +36,12 @@ service MediaBoxControl {
   rpc ResumeTorrent(TorrentRef) returns (RunResult);
   rpc SetEpisodeIgnored(EpisodeIgnoreArg) returns (RunResult);
   rpc SetSeasonIgnored(SeasonIgnoreArg) returns (RunResult);
+  // Removes the transfer; bytes already on disk are left alone.
+  rpc RemoveTorrent(TorrentRef) returns (RunResult);
+  // The questions MediaBox is waiting on an answer to (large torrent, quality wait, watchlist
+  // confirmation, planned-download day). Same prompts the Telegram inline keyboards carry.
+  rpc GetPrompts(Empty) returns (PromptList);
+  rpc AnswerPrompt(PromptAnswer) returns (RunResult);
 }
 
 message Empty {}
@@ -96,3 +102,10 @@ message EpisodeIgnoreArg { string show = 1; int32 season = 2; int32 episode = 3;
 // Same, for a whole season. path/name identify the show the way ShowQuery does, because
 // ignoring a season means tombstoning every episode of it that isn't already on disk.
 message SeasonIgnoreArg { string path = 1; string name = 2; int32 season = 3; bool ignored = 4; }
+
+// An open approval prompt. `id` is the callback id its Telegram buttons carry, so answering here and
+// tapping there run the identical code path; `value` is the button's own callback value.
+message PromptOption { string label = 1; string value = 2; }
+message Prompt { string id = 1; string text = 2; repeated PromptOption options = 3; int64 asked_unix = 4; }
+message PromptList { repeated Prompt items = 1; }
+message PromptAnswer { string id = 1; string value = 2; }

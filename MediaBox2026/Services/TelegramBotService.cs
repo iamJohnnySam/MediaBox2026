@@ -168,6 +168,10 @@ public class TelegramBotService(
 
     public async Task<int?> SendInlineKeyboardAsync(string text, List<List<InlineButton>> buttons, CancellationToken ct = default)
     {
+        // Before the send, and before any early return: a prompt Telegram never received is still one
+        // Tower can answer, and that is the whole point of the registry.
+        state.RecordPrompt(text, buttons);
+
         var chatId = authStore.GetAdminChatId();
         if (chatId == null)
         {

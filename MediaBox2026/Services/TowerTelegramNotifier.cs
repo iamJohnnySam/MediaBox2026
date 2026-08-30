@@ -16,6 +16,7 @@ public class TowerTelegramNotifier : ITelegramNotifier
 {
     private readonly IOptionsMonitor<MediaBoxSettings> _settings;
     private readonly ILogger<TowerTelegramNotifier> _logger;
+    private readonly MediaBoxState _state;
 
     // Lazy channel + client: built once on first use, keyed on TowerGrpcUrl so we
     // recreate when the URL changes between hot-reload cycles.
@@ -28,10 +29,12 @@ public class TowerTelegramNotifier : ITelegramNotifier
 
     public TowerTelegramNotifier(
         IOptionsMonitor<MediaBoxSettings> settings,
-        ILogger<TowerTelegramNotifier> logger)
+        ILogger<TowerTelegramNotifier> logger,
+        MediaBoxState state)
     {
         _settings = settings;
         _logger = logger;
+        _state = state;
     }
 
     // ── channel management ───────────────────────────────────────────────────
@@ -97,6 +100,10 @@ public class TowerTelegramNotifier : ITelegramNotifier
     /// <summary>Send an inline-keyboard message to an arbitrary chat. Returns message id or null.</summary>
     public async Task<int?> SendKeyboardToChatAsync(long chatId, string text, List<List<InlineButton>> buttons, string? parseMode, CancellationToken ct)
     {
+        // Recorded before the send (and before any failure): a prompt Tower's bridge dropped is still
+        // one this box can be asked about over gRPC.
+        _state.RecordPrompt(text, buttons);
+
         try
         {
             var req = new InlineKeyboardRequest
@@ -249,6 +256,10 @@ public class TowerTelegramNotifier : ITelegramNotifier
     /// </summary>
     public async Task<int?> SendInlineKeyboardAsync(string text, List<List<InlineButton>> buttons, CancellationToken ct = default)
     {
+        // Recorded before the send (and before any failure): a prompt Tower's bridge dropped is still
+        // one this box can be asked about over gRPC.
+        _state.RecordPrompt(text, buttons);
+
         try
         {
             var req = new InlineKeyboardRequest
