@@ -31,6 +31,12 @@ var logFilePath = Path.Combine(yearMonthPath, logFileName);
 Log.Logger = new LoggerConfiguration()
 	.MinimumLevel.Information()
 	.MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
+	// Serilog is configured here, not from appsettings, so the Logging:LogLevel
+	// section does not reach it — these have to be overrides too. HttpClient logs
+	// four lines per outbound call, and this app polls Transmission every 30s, so
+	// that alone was ~5,700 journal lines a day saying a local RPC succeeded.
+	.MinimumLevel.Override("System.Net.Http.HttpClient", LogEventLevel.Warning)
+	.MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
 	.Enrich.FromLogContext()
 	.WriteTo.Console()
 	.WriteTo.File(

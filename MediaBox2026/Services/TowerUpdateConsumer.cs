@@ -72,7 +72,9 @@ public class TowerUpdateConsumer(
         {
             try
             {
-                logger.LogInformation("TowerUpdateConsumer: opening StreamUpdates...");
+                // Debug, not Information: one line per reconnect attempt is only interesting
+                // when something is actually wrong, and the Warning above already says that.
+                logger.LogDebug("TowerUpdateConsumer: opening StreamUpdates...");
                 using var call = client.StreamUpdates(new StreamRequest { ClientId = "mediabox" }, cancellationToken: ct);
 
                 // Reset back-off on successful connect.
@@ -96,6 +98,17 @@ public class TowerUpdateConsumer(
                 logger.LogInformation("TowerUpdateConsumer: gRPC call cancelled — stopping.");
                 break;
             }
+            // Tower being down is the ordinary case, not an incident: it restarts on every
+            // deploy and this stream reconnects behind it. Logging the exception object here
+            // wrote a ~15-line socket/gRPC stack trace per attempt — 498 of them in one day,
+            // which is most of what MediaBox says to the journal. The status alone is the
+            // whole diagnostic; anything other than Unavailable still gets the full trace.
+            catch (RpcException ex) when (ex.StatusCode == StatusCode.Unavailable)
+            {
+                logger.LogWarning(
+                    "TowerUpdateConsumer: Tower unreachable ({Detail}). Reconnecting after back-off.",
+                    ex.Status.Detail);
+            }
             catch (RpcException ex)
             {
                 logger.LogWarning(ex,
@@ -110,7 +123,7 @@ public class TowerUpdateConsumer(
             // Back-off before reconnect.
             var delay = BackoffDelays[Math.Min(backoffIndex, BackoffDelays.Length - 1)];
             backoffIndex++;
-            logger.LogInformation("TowerUpdateConsumer: waiting {Delay} before reconnect...", delay);
+            logger.LogDebug("TowerUpdateConsumer: waiting {Delay} before reconnect...", delay);
 
             try
             {
