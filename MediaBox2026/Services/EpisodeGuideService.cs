@@ -205,6 +205,24 @@ public class EpisodeGuideService(
         return (choices, choices.Count == 0 ? $"No releases found for {what}." : "");
     }
 
+    /// <summary>
+    /// The best release for one episode that meets the ≤720p standard, or null if EZTV lists none.
+    /// Best-seeded first, and single episodes only — swapping one episode's download for a whole
+    /// season pack is not a smaller download by any reading.
+    ///
+    /// This is the search the RSS feeds cannot do: they carry what was published recently, while
+    /// EZTV's per-show list still holds the older acceptable releases that a pending row is waiting on.
+    /// </summary>
+    public async Task<TorrentChoice?> FindAcceptableAsync(
+        string showName, int season, int episode, CancellationToken ct = default)
+    {
+        var guide = await GetAiredAsync(showName, ct);
+        if (guide.ImdbId.Length == 0) return null;
+
+        var (choices, _) = await SearchEpisodeAsync(guide.ImdbId, season, episode, ct);
+        return choices.FirstOrDefault(c => c.MeetsStandard && !c.SeasonPack && c.Magnet.Length > 0);
+    }
+
     /// <summary>All EZTV torrents for a show, cached per IMDb id (one fetch serves every episode).</summary>
     private async Task<(List<EztvTorrent> Items, string Error)> GetShowTorrentsAsync(string imdbId, CancellationToken ct)
     {

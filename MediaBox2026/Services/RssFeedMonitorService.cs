@@ -7,6 +7,7 @@ namespace MediaBox2026.Services;
 public class RssFeedMonitorService(
     MediaDatabase db,
     MediaCatalogService catalog,
+    EpisodeGuideService guide,
     TransmissionClient transmission,
     ITelegramNotifier telegram,
     MediaBoxState state,
@@ -422,8 +423,38 @@ public class RssFeedMonitorService(
                 if (large is { Status: LargeTorrentStatus.Paused or LargeTorrentStatus.Planned })
                 {
                     parkedCompromise++;
-                    logger.LogInformation("⏸️ Compromise for {Title} still parked for approval ({Quality}) — keeping the ≤720p search open",
-                        item.RssTitle, item.Quality);
+
+                    // Ask EZTV directly rather than waiting on the feeds. Both feeds only carry what
+                    // was published recently, and this row exists precisely because nothing acceptable
+                    // arrived while they were looking — the release it wants is older than their window.
+                    var better = await guide.FindAcceptableAsync(item.ShowName, item.Season, item.Episode, ct);
+                    if (better is null)
+                    {
+                        logger.LogInformation("⏸️ Compromise for {Title} still parked ({Quality}) — no ≤720p release yet",
+                            item.RssTitle, item.Quality);
+                        continue;
+                    }
+
+                    // Add the replacement before dropping the compromise, so a failed add leaves the
+                    // parked torrent exactly where it was rather than nothing at all.
+                    var replacement = await transmission.AddTorrentAsync(better.Magnet, ct);
+                    if (replacement is null)
+                    {
+                        logger.LogWarning("Found {Title} ({Quality}) but Transmission refused it — leaving the parked compromise alone",
+                            better.Title, better.Quality);
+                        continue;
+                    }
+
+                    await DropCompromiseAsync(item, better.Title, ct);
+                    parkedCompromise--;
+
+                    var note = $"🔁 Replaced parked download\n\n{item.RssTitle}\n({item.Quality}, awaiting your approval)\n\n→ {better.Title}\n({better.Quality}, {TransmissionMonitorService.FormatSize(better.SizeBytes)}) — downloading now.";
+                    if (item.TelegramMessageId.HasValue)
+                        await telegram.EditMessageAsync(item.TelegramMessageId.Value, note, ct);
+                    else
+                        await telegram.SendMessageAsync(note, ct);
+
+                    MarkDispatched(item);
                     continue;
                 }
 
