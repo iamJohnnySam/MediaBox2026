@@ -11,6 +11,11 @@
     -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <!-- Precompile to native on publish. Measured on this box (2010 i5-660, DesignWorks,
+         self-contained both ways, R2R the only variable): cold start 2.98s -> 1.84s median,
+         and far steadier (1.84 every run vs 2.97-3.68). Costs ~26 MB of publish size and
+         needs a RID on the publish command. -->
+    <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
 
   <ItemGroup>
