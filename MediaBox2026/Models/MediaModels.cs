@@ -93,6 +93,14 @@ public class PendingDownload : IEntity
     public DateTime? LastAsked { get; set; }
     public int? TelegramMessageId { get; set; }
     public PendingStatus Status { get; set; } = PendingStatus.WaitingForQuality;
+
+    /// <summary>
+    /// Info hash of the over-720p release auto-taken when nothing acceptable turned up in time.
+    /// While that torrent sits paused for size approval the row deliberately stays
+    /// WaitingForQuality, so the feeds keep hunting and a ≤720p release can still replace it.
+    /// Empty once the compromise is settled — approved, running, or replaced.
+    /// </summary>
+    public string CompromiseHash { get; set; } = "";
 }
 
 public enum PendingStatus

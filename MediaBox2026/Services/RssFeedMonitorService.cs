@@ -233,7 +233,7 @@ public class RssFeedMonitorService(
             {
                 logger.LogInformation("Quality acceptable, downloading immediately: {Title}", title);
                 var added = await transmission.AddTorrentAsync(torrentUrl, ct);
-                if (added)
+                if (added is not null)
                 {
                     await telegram.SendMessageAsync($"📥 New download: {title}", ct);
                     state.AddActivity($"Started download: {title}");
@@ -255,6 +255,7 @@ public class RssFeedMonitorService(
                         p.Status == PendingStatus.WaitingForQuality);
                     if (pendingDupe != null)
                     {
+                        await DropCompromiseAsync(pendingDupe, title, ct);
                         pendingDupe.Status = PendingStatus.Downloaded;
                         db.PendingDownloads.Update(pendingDupe);
                         logger.LogInformation("✅ Acceptable quality ({Quality}) arrived for pending episode, cancelling prompt: {Title}", quality, title);
@@ -329,8 +330,13 @@ public class RssFeedMonitorService(
                 else
                 {
                     existing.CheckCount++;
-                    existing.TorrentUrl = torrentUrl;
-                    existing.Quality = quality;
+                    // Once a compromise is taken the row describes what we actually downloaded, so a
+                    // later release from another group must not repoint it.
+                    if (existing.CompromiseHash.Length == 0)
+                    {
+                        existing.TorrentUrl = torrentUrl;
+                        existing.Quality = quality;
+                    }
                     db.PendingDownloads.Update(existing);
                     logger.LogDebug("Updated existing pending download (CheckCount: {Count}): {Title}", existing.CheckCount, title);
                 }
@@ -359,7 +365,7 @@ public class RssFeedMonitorService(
             return;
         }
 
-        int readyToAsk = 0, stillWaiting = 0, recentlyAsked = 0, alreadyHave = 0;
+        int readyToAsk = 0, stillWaiting = 0, recentlyAsked = 0, alreadyHave = 0, parkedCompromise = 0;
 
         foreach (var item in pending)
         {
@@ -407,6 +413,30 @@ public class RssFeedMonitorService(
                 continue;
             }
 
+            // A compromise we already took: either it is still parked for size approval — in which
+            // case this row stays open so the feeds keep hunting for a ≤720p replacement — or it has
+            // been settled and the row can finally be booked as dispatched.
+            if (item.CompromiseHash.Length > 0)
+            {
+                var large = db.PendingLargeTorrents.FindOne(p => p.Hash == item.CompromiseHash);
+                if (large is { Status: LargeTorrentStatus.Paused or LargeTorrentStatus.Planned })
+                {
+                    parkedCompromise++;
+                    logger.LogInformation("⏸️ Compromise for {Title} still parked for approval ({Quality}) — keeping the ≤720p search open",
+                        item.RssTitle, item.Quality);
+                    continue;
+                }
+
+                // ponytail: no row at all means it was never over the size threshold, because the
+                // transmission monitor parks large torrents within one of its cycles (5 min) and this
+                // runs on the RSS cycle (30 min). If those intervals ever cross, a large torrent could
+                // be booked here before it is parked — store the add time and grace it if so.
+                logger.LogInformation("✅ Compromise for {Title} settled ({Status}) — closing pending row",
+                    item.RssTitle, large?.Status.ToString() ?? "downloading");
+                MarkDispatched(item);
+                continue;
+            }
+
             if (elapsed.TotalHours < waitHours)
             {
                 stillWaiting++;
@@ -421,30 +451,30 @@ public class RssFeedMonitorService(
             {
                 logger.LogInformation("⤵️ No acceptable release after {Hours:F1}h (>{Auto}h), auto-downloading pending: {Title} ({Quality})",
                     elapsed.TotalHours, autoHours, item.RssTitle, item.Quality);
-                var added = await transmission.AddTorrentAsync(item.TorrentUrl, ct);
-                if (added)
+                var hash = await transmission.AddTorrentAsync(item.TorrentUrl, ct);
+                if (hash is not null)
                 {
-                    item.Status = PendingStatus.Downloaded;
+                    // Stays WaitingForQuality, and undispatched, on purpose: this was a compromise on
+                    // the ≤720p rule, so while it sits paused for size approval the feeds keep hunting
+                    // and ResolveCompromise below closes the row the moment the compromise is settled.
+                    item.CompromiseHash = hash;
                     db.PendingDownloads.Update(item);
-                    db.DispatchedEpisodes.Insert(new DispatchedEpisode
-                    {
-                        ShowName = item.ShowName,
-                        Season = item.Season,
-                        Episode = item.Episode,
-                        DispatchedDate = DateTime.UtcNow
-                    });
                     state.AddActivity($"Auto-downloaded (no better quality): {item.RssTitle}");
+
+                    var stillHunting = hash.Length > 0
+                        ? "\nStill watching for a ≤720p version until this one is approved."
+                        : "";
 
                     if (item.TelegramMessageId.HasValue)
                     {
                         await telegram.EditMessageAsync(
                             item.TelegramMessageId.Value,
-                            $"⬇️ AUTO-DOWNLOADED\n\n{item.RssTitle}\nNo better quality after {autoHours}h — downloaded {item.Quality}. No response needed.",
+                            $"⬇️ AUTO-DOWNLOADED\n\n{item.RssTitle}\nNo better quality after {autoHours}h — downloaded {item.Quality}. No response needed.{stillHunting}",
                             ct);
                     }
                     else
                     {
-                        await telegram.SendMessageAsync($"⬇️ Auto-downloaded (no better quality after {autoHours}h): {item.RssTitle}", ct);
+                        await telegram.SendMessageAsync($"⬇️ Auto-downloaded (no better quality after {autoHours}h): {item.RssTitle}{stillHunting}", ct);
                     }
                 }
                 else
@@ -537,7 +567,7 @@ public class RssFeedMonitorService(
                         if (result == "yes")
                         {
                             var added = await transmission.AddTorrentAsync(item.TorrentUrl, ct);
-                            if (added)
+                            if (added is not null)
                             {
                                 item.Status = PendingStatus.Downloaded;
 
@@ -614,8 +644,8 @@ public class RssFeedMonitorService(
             }
         }
 
-        logger.LogInformation("CheckPendingQuality complete: {Ready} notifications sent, {Waiting} still waiting, {Recent} recently asked, {AlreadyHave} already in library",
-            readyToAsk, stillWaiting, recentlyAsked, alreadyHave);
+        logger.LogInformation("CheckPendingQuality complete: {Ready} notifications sent, {Waiting} still waiting, {Recent} recently asked, {AlreadyHave} already in library, {Parked} compromise(s) parked for approval",
+            readyToAsk, stillWaiting, recentlyAsked, alreadyHave, parkedCompromise);
     }
 
     private async Task SendImmediateQualityNotificationAsync(PendingDownload item, CancellationToken ct)
@@ -675,7 +705,7 @@ public class RssFeedMonitorService(
                     if (result == "yes")
                     {
                         var added = await transmission.AddTorrentAsync(item.TorrentUrl, ct);
-                        if (added)
+                        if (added is not null)
                         {
                             item.Status = PendingStatus.Downloaded;
 
@@ -766,10 +796,12 @@ public class RssFeedMonitorService(
         if (fallbackUrls == null || fallbackUrls.Count == 0)
             return;
 
-        // Only bother if there are pending items whose quality is above 1080p
+        // Worth scanning for two kinds of pending item: above-1080p ones we will never auto-take,
+        // and compromises already downloaded but parked for size approval — those can still be
+        // replaced by an acceptable release right up until they are approved.
         var abovePending = db.PendingDownloads
             .Find(p => p.Status == PendingStatus.WaitingForQuality)
-            .Where(p => FileNameParser.IsAbove1080p(p.Quality))
+            .Where(p => FileNameParser.IsAbove1080p(p.Quality) || p.CompromiseHash.Length > 0)
             .ToList();
 
         if (abovePending.Count == 0)
@@ -874,8 +906,9 @@ public class RssFeedMonitorService(
                 }
 
                 var added = await transmission.AddTorrentAsync(torrentUrl, ct);
-                if (added)
+                if (added is not null)
                 {
+                    await DropCompromiseAsync(pendingMatch, title, ct);
                     await telegram.SendMessageAsync(
                         $"📥 Better quality found on fallback feed ({quality}): {title}", ct);
                     state.AddActivity($"Fallback quality download: {title}");
@@ -915,6 +948,67 @@ public class RssFeedMonitorService(
 
         if (abovePending.Count > 0)
             logger.LogInformation("Fallback feed scan complete. {Remaining} above-1080p pending item(s) still unresolved.", abovePending.Count);
+    }
+
+    /// <summary>
+    /// Closes a pending row for good: the episode is on its way, so no feed should offer it again.
+    /// </summary>
+    private void MarkDispatched(PendingDownload item)
+    {
+        item.CompromiseHash = "";
+        item.Status = PendingStatus.Downloaded;
+        db.PendingDownloads.Update(item);
+
+        if (!db.DispatchedEpisodes.Exists(d =>
+                d.ShowName == item.ShowName && d.Season == item.Season && d.Episode == item.Episode))
+        {
+            db.DispatchedEpisodes.Insert(new DispatchedEpisode
+            {
+                ShowName = item.ShowName,
+                Season = item.Season,
+                Episode = item.Episode,
+                DispatchedDate = DateTime.UtcNow
+            });
+        }
+    }
+
+    /// <summary>
+    /// Throws away the compromise torrent now that an acceptable release has been added in its place,
+    /// and retires its size-approval prompt so its buttons cannot act on a torrent that is gone.
+    ///
+    /// Only a compromise still parked for approval is dropped. One already approved — or small enough
+    /// that it was never parked — is left alone: it is downloading with consent, and killing it to
+    /// re-fetch the same episode would waste what it has already pulled. The caller marks the row
+    /// downloaded either way, so the duplicate stops there.
+    /// </summary>
+    private async Task DropCompromiseAsync(PendingDownload item, string replacement, CancellationToken ct)
+    {
+        if (item.CompromiseHash.Length == 0) return;
+
+        var large = db.PendingLargeTorrents.FindOne(p => p.Hash == item.CompromiseHash);
+        if (large is not { Status: LargeTorrentStatus.Paused or LargeTorrentStatus.Planned })
+        {
+            item.CompromiseHash = "";
+            return;
+        }
+
+        // deleteData: true — the partial file of a torrent nobody approved is worth nothing, and
+        // leaving it behind would only confuse the organizer with a half-episode.
+        await transmission.RemoveTorrentAsync(item.CompromiseHash, deleteData: true, ct);
+        db.PendingLargeTorrents.DeleteMany(p => p.Id == large.Id);
+
+        if (large.TelegramMessageId.HasValue)
+        {
+            await telegram.EditMessageAsync(
+                large.TelegramMessageId.Value,
+                $"🔁 REPLACED\n\n📦 {large.TorrentName}\nAn acceptable release turned up — {replacement} — so this one was removed. No response needed.",
+                ct);
+        }
+
+        logger.LogInformation("🔁 Dropped parked compromise {Old} for {Show} S{Season}E{Episode}, replaced by {New}",
+            large.TorrentName, item.ShowName, item.Season, item.Episode, replacement);
+        state.AddActivity($"Replaced parked compromise with {replacement}");
+        item.CompromiseHash = "";
     }
 
     private void MarkProcessed(string guid, string title)

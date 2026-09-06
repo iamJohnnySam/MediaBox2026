@@ -324,7 +324,7 @@ public class MovieWatchlistService(
         item.TorrentUrl = result.TorrentUrl;
         item.Quality = result.Quality;
 
-        if (!await transmission.AddTorrentAsync(result.TorrentUrl, ct))
+        if (await transmission.AddTorrentAsync(result.TorrentUrl, ct) is null)
         {
             logger.LogWarning("Failed to add watchlist torrent for {Name} [{Quality}]", item.Name, result.Quality);
             db.Watchlist.Update(item);
@@ -352,7 +352,7 @@ public class MovieWatchlistService(
             if (response == "yes")
             {
                 var added = await transmission.AddTorrentAsync(item.TorrentUrl!, ct);
-                if (added)
+                if (added is not null)
                 {
                     item.Status = WatchlistStatus.Downloading;
                     db.Watchlist.Update(item);

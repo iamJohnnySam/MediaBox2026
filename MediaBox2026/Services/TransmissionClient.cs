@@ -23,7 +23,12 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
 
     private static readonly TimeSpan AltSpeedTtl = TimeSpan.FromMinutes(2);
 
-    public async Task<bool> AddTorrentAsync(string url, CancellationToken ct = default)
+    /// <summary>
+    /// Adds a torrent and returns its info hash — the only durable handle on it, since session ids
+    /// are renumbered across Transmission restarts. Null means the add failed; "" means it was added
+    /// but Transmission named no hash to hold on to.
+    /// </summary>
+    public async Task<string?> AddTorrentAsync(string url, CancellationToken ct = default)
     {
         var request = new JsonObject
         {
@@ -36,12 +41,15 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
         };
 
         var result = await SendRpcAsync(request, ct);
-        if (result != null)
-        {
-            logger.LogInformation("Torrent added: {Url}", url);
-            return true;
-        }
-        return false;
+        if (result == null) return null;
+
+        logger.LogInformation("Torrent added: {Url}", url);
+
+        if (!result.Value.TryGetProperty("arguments", out var args)) return "";
+        // "torrent-duplicate" means Transmission already had it — still the right handle to keep.
+        if (!args.TryGetProperty("torrent-added", out var addedInfo) &&
+            !args.TryGetProperty("torrent-duplicate", out addedInfo)) return "";
+        return addedInfo.TryGetProperty("hashString", out var hs) ? hs.GetString() ?? "" : "";
     }
 
     public async Task<List<TorrentInfo>> GetTorrentsAsync(CancellationToken ct = default)

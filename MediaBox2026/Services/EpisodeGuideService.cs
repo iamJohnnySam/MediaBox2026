@@ -289,7 +289,7 @@ public class EpisodeGuideService(
             return (false, "No torrent link.");
 
         var added = await transmission.AddTorrentAsync(magnet, ct);
-        if (!added) return (false, "Transmission rejected the torrent (is it running?).");
+        if (added is null) return (false, "Transmission rejected the torrent (is it running?).");
 
         if (season > 0 && episode > 0 && !string.IsNullOrWhiteSpace(showName) &&
             !db.DispatchedEpisodes.Exists(d => d.ShowName == showName && d.Season == season && d.Episode == episode))
