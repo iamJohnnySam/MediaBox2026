@@ -11,6 +11,18 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
 {
     private string? _sessionId;
 
+    /// <summary>
+    /// Speed mode, cached. Every other field on the gRPC GetStatus response comes from cached
+    /// state; this one was a live Transmission RPC per call, and Tower calls GetStatus every 30s
+    /// while anyone has the Home page open. It is a single boolean that only changes when someone
+    /// toggles it — and both toggle paths (Telegram, Tower's gRPC) go through SetAltSpeedAsync
+    /// below, which writes through to this cache. So the TTL only bounds the one case it cannot
+    /// see: a toggle made in Transmission's own web UI, which is now loopback-only anyway.
+    /// </summary>
+    private (bool Value, DateTime At)? _altSpeed;
+
+    private static readonly TimeSpan AltSpeedTtl = TimeSpan.FromMinutes(2);
+
     public async Task<bool> AddTorrentAsync(string url, CancellationToken ct = default)
     {
         var request = new JsonObject
@@ -131,6 +143,11 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
 
     public async Task<bool?> GetAltSpeedEnabledAsync(CancellationToken ct = default)
     {
+        // Reference assignment of the tuple is atomic, and a racing pair of callers would at worst
+        // both fetch once — not worth a lock on the read path.
+        if (_altSpeed is { } cached && DateTime.UtcNow - cached.At < AltSpeedTtl)
+            return cached.Value;
+
         var request = new JsonObject
         {
             ["method"] = "session-get",
@@ -143,7 +160,13 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
         if (result == null) return null;
         if (result.Value.TryGetProperty("arguments", out var args) &&
             args.TryGetProperty("alt-speed-enabled", out var prop))
-            return prop.GetBoolean();
+        {
+            var value = prop.GetBoolean();
+            _altSpeed = (value, DateTime.UtcNow);
+            return value;
+        }
+        // A failed read must not be cached: the next caller should retry rather than be told
+        // "off" for two minutes because Transmission happened to be restarting.
         return null;
     }
 
@@ -160,9 +183,15 @@ public class TransmissionClient(IHttpClientFactory httpFactory, IOptionsMonitor<
         var result = await SendRpcAsync(request, ct);
         if (result != null)
         {
+            // Write through, so a toggle from Telegram or Tower shows up on the next GetStatus
+            // instead of waiting out the TTL. This is what lets the TTL be generous.
+            _altSpeed = (enabled, DateTime.UtcNow);
             logger.LogInformation("Transmission alt speed {State}", enabled ? "enabled" : "disabled");
             return true;
         }
+        // The set failed, so the cached value may no longer describe reality — drop it and let the
+        // next read find out for itself.
+        _altSpeed = null;
         return false;
     }
 
