@@ -116,7 +116,9 @@ public class TransmissionMonitorService(
         // Check for new large torrents from RSS (>1GB)
         const long oneGigabyte = 1_073_741_824; // 1GB in bytes
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var recentWindow = 300; // 5 minutes window to catch newly added torrents
+        // Wide enough to cover magnet metadata fetch plus one poll interval: a magnet reports
+        // totalSize 0 until its metadata arrives, and nothing below acts on a torrent until it does.
+        var recentWindow = 1800; // 30 minutes
 
         foreach (var torrent in torrents.Where(t => !t.IsFinished && t.TotalSize > oneGigabyte))
         {
@@ -155,9 +157,12 @@ public class TransmissionMonitorService(
         // Announce each newly added torrent once, whoever added it — the RSS monitor, the watchlist,
         // the episode guide, or a magnet dropped into Transmission by hand. Over-threshold ones are
         // deliberately excluded: they get their own approval prompt just below, which says more.
+        // Zero-size ones are skipped rather than announced: a magnet has no size until its metadata
+        // arrives, and announcing then reports "0 MB" and misfiles a large torrent as a small one.
+        // Not marking them announced is what lets a later cycle send the real size.
         _announced.IntersectWith(torrents.Select(t => t.Id));
         foreach (var torrent in torrents.Where(t =>
-                     t.TotalSize <= oneGigabyte && t.DateAdded > 0 && (now - t.DateAdded) <= recentWindow))
+                     t.TotalSize is > 0 and <= oneGigabyte && t.DateAdded > 0 && (now - t.DateAdded) <= recentWindow))
         {
             if (!_announced.Add(torrent.Id)) continue;
 
