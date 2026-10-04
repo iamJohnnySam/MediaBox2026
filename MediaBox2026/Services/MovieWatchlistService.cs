@@ -185,6 +185,8 @@ public class MovieWatchlistService(
                 {
                     var title = movie.GetProperty("title").GetString() ?? "";
                     var year = movie.GetProperty("year").GetInt32();
+                    DateTime? uploaded = movie.TryGetProperty("date_uploaded_unix", out var du) && du.TryGetInt64(out var unix) && unix > 0
+                        ? DateTimeOffset.FromUnixTimeSeconds(unix).UtcDateTime : null;
                     var score = FileNameParser.FuzzyMatch(title, item.Name);
 
                     logger.LogDebug("Match score {Score:F2} for '{Title}' ({Year})", score, title, year);
@@ -203,7 +205,7 @@ public class MovieWatchlistService(
                         var size = torrent.TryGetProperty("size", out var s) ? s.GetString() ?? "" : "";
 
                         if (string.IsNullOrEmpty(torrentUrl)) continue;
-                        var candidate = new YtsResult(title, year, quality, torrentUrl, size);
+                        var candidate = new YtsResult(title, year, quality, torrentUrl, size, uploaded);
 
                         if (FileNameParser.IsQualityAcceptable(quality))
                         {
@@ -257,10 +259,12 @@ public class MovieWatchlistService(
                     continue;
                 }
 
-                item.HighQualityFirstSeen ??= DateTime.UtcNow;
+                // First sighting seeds the clock from when YTS published the film, so one that has
+                // been up for months skips the wait. Only the first: Skip resets it to now on purpose.
+                item.HighQualityFirstSeen ??= highMatch!.Uploaded is { } up && up < DateTime.UtcNow ? up : DateTime.UtcNow;
                 var waited = DateTime.UtcNow - item.HighQualityFirstSeen.Value;
-                var waitHours = settings.CurrentValue.QualityWaitHours;
-                var autoHours = settings.CurrentValue.QualityAutoDownloadHours;
+                var waitHours = settings.CurrentValue.WatchlistQualityWaitHours;
+                var autoHours = settings.CurrentValue.WatchlistQualityAutoDownloadHours;
 
                 if (waited.TotalHours < waitHours)
                 {
@@ -386,5 +390,5 @@ public class MovieWatchlistService(
         }
     }
 
-    private record YtsResult(string Title, int Year, string Quality, string TorrentUrl, string Size);
+    private record YtsResult(string Title, int Year, string Quality, string TorrentUrl, string Size, DateTime? Uploaded);
 }

@@ -38,6 +38,8 @@ public class MediaBoxSettingsIo(
 			["TransmissionCheckMinutes"] = s.TransmissionCheckMinutes.ToString(),
 			["QualityWaitHours"] = s.QualityWaitHours.ToString(),
 			["QualityAutoDownloadHours"] = s.QualityAutoDownloadHours.ToString(),
+			["WatchlistQualityWaitHours"] = s.WatchlistQualityWaitHours.ToString(),
+			["WatchlistQualityAutoDownloadHours"] = s.WatchlistQualityAutoDownloadHours.ToString(),
 			["YouTubeDownloadPaused"] = s.YouTubeDownloadPaused.ToString(),
 			["PlannedDownloadDayOfMonth"] = s.PlannedDownloadDayOfMonth.ToString(),
 			["PlannedDownloadHour"] = s.PlannedDownloadHour.ToString(),
@@ -55,7 +57,8 @@ public class MediaBoxSettingsIo(
 		"TvShowsPath", "MoviesPath", "DownloadsPath", "YouTubePath", "UnknownPath",
 		"TransmissionRpcUrl", "TransmissionUsername", "JellyfinUrl", "RssFeedUrl",
 		"RssFeedCheckMinutes", "TransmissionCheckMinutes", "QualityWaitHours",
-		"QualityAutoDownloadHours", "YouTubeDownloadPaused", "NewsSources",
+		"QualityAutoDownloadHours", "WatchlistQualityWaitHours", "WatchlistQualityAutoDownloadHours",
+		"YouTubeDownloadPaused", "NewsSources",
 		"PlannedDownloadDayOfMonth", "PlannedDownloadHour"
 	};
 
@@ -171,6 +174,8 @@ public class MediaBoxSettingsIo(
 			case "TransmissionCheckMinutes":
 			case "QualityWaitHours":
 			case "QualityAutoDownloadHours":
+			case "WatchlistQualityWaitHours":
+			case "WatchlistQualityAutoDownloadHours":
 				if (!int.TryParse(rawValue, out var n)) return false;
 				writer.WriteNumber(key, n);
 				return true;

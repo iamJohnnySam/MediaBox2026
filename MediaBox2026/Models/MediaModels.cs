@@ -220,6 +220,12 @@ public class MediaBoxSettings
     // After this many hours with no acceptable-quality release, auto-download the pending
     // higher-quality file (<=1080p only; 4K/2160p still waits for user approval) and dismiss the prompt.
     public int QualityAutoDownloadHours { get; set; } = 6;
+    // Movie watchlist's own quality clock, in place of the TV one above: a 720p YTS release often
+    // trails the 1080p by days, so a film waits this long for one, counted from when YTS first
+    // published it (not from when we first looked) — a film that has sat on the site for months
+    // with no 720p goes straight to the ask/auto step.
+    public int WatchlistQualityWaitHours { get; set; } = 72;
+    public int WatchlistQualityAutoDownloadHours { get; set; } = 168;
     public int MediaScanHours { get; set; } = 12;
 
     /// <summary>
