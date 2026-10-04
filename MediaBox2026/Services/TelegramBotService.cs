@@ -874,7 +874,10 @@ public class TelegramBotService(
                 break;
 
             default:
-                await SendToChatAsync(chatId, "Unknown command. Use /help for available commands.", ct);
+                // In Tower mode every message is broadcast here too, including Tower's own commands
+                // ("run Bedtime", "/lan", "/reboot") — Tower answers those, so stay quiet.
+                if (!UseTower)
+                    await SendToChatAsync(chatId, "Unknown command. Use /help for available commands.", ct);
                 break;
         }
     }
