@@ -224,6 +224,44 @@ public static partial class FileNameParser
         return (double)intersection / union;
     }
 
+    /// <summary>
+    /// Words a formulaic kids' show repeats every week. They carry no identity, so they are
+    /// dropped before two episode titles are compared — "Pups Save the X" vs "Pups Save the Y"
+    /// would otherwise look 60% alike on boilerplate alone.
+    /// </summary>
+    private static readonly HashSet<string> EpisodeTitleStopWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "pups", "pup", "save", "saves", "saved", "stop", "stops", "the", "a", "an", "and",
+        "to", "of", "in", "on", "at", "vs", "air", "fire", "rescue", "search", "wheels"
+    };
+
+    /// <summary>
+    /// The distinctive words of the episode title(s) a release names — the text between the
+    /// SxxExx tag and the quality tag. Trackers renumber paired releases (the same two segments
+    /// posted as S13E11E12 and again as S13E12E13), so the numbers cannot tell a duplicate from
+    /// new content; the titles can. Empty when the name carries no title to compare.
+    /// </summary>
+    public static HashSet<string> EpisodeTitleTokens(string fileName)
+    {
+        var baseName = Path.GetFileNameWithoutExtension(fileName);
+
+        var tag = SeasonEpisodeRegex1().Match(baseName);
+        if (!tag.Success) return [];
+
+        var title = baseName[(tag.Index + tag.Length)..];
+
+        // Everything from the quality tag on is technical metadata, not title.
+        var quality = QualityRegex().Match(title);
+        if (quality.Success) title = title[..quality.Index];
+
+        return PunctuationRegex().Split(title)
+            .Where(w => w.Length >= 2
+                        && !EpisodeTitleStopWords.Contains(w)
+                        && !w.All(char.IsDigit))
+            .Select(w => w.ToLowerInvariant())
+            .ToHashSet();
+    }
+
     [GeneratedRegex(@"[^\p{L}\p{N}]+")]
     private static partial Regex PunctuationRegex();
 

@@ -212,6 +212,16 @@ public class RssFeedMonitorService(
                     MarkProcessed(guid, title);
                     continue;
                 }
+
+                // Numbers can lie: the same two segments get posted under different episode
+                // numbers (S13E11E12, then S13E12E13), which the check above reads as new
+                // content. The titles don't move, so they are the last word on duplicates.
+                if (catalog.HasEpisodeTitle(parsed.CleanName, parsed.Season.Value, title))
+                {
+                    logger.LogInformation("Skipping renumbered duplicate: {Title}", title);
+                    MarkProcessed(guid, title);
+                    continue;
+                }
             }
             else
             {

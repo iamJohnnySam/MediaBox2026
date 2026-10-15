@@ -534,6 +534,78 @@ public class MediaCatalogService(
         }
     }
 
+    /// <summary>Same-show lookup used by the episode checks: fuzzy on name, year preferred.</summary>
+    private TvShow? MatchShowForEpisode(string showName, int? year)
+    {
+        var shows = db.TvShows.FindAll().ToList();
+
+        TvShow? match = null;
+        if (year.HasValue)
+        {
+            match = shows.FirstOrDefault(s =>
+                FileNameParser.FuzzyMatch(s.Name, showName) >= 0.5 &&
+                s.Year == year);
+
+            if (match == null)
+            {
+                match = shows.FirstOrDefault(s =>
+                    FileNameParser.FuzzyMatch(s.Name, showName) >= 0.5 &&
+                    !s.Year.HasValue);
+            }
+        }
+
+        return match ?? shows
+            .Where(s => FileNameParser.FuzzyMatch(s.Name, showName) >= 0.5)
+            .OrderByDescending(s => s.Year.HasValue ? 1 : 0)
+            .ThenByDescending(s => s.LatestSeason)
+            .FirstOrDefault();
+    }
+
+    /// <summary>Token overlap at or above this reads as the same episode content.</summary>
+    private const double TitleDuplicateThreshold = 0.85;
+
+    /// <summary>
+    /// Does a file already on disk carry the same episode title(s) as this release? Trackers
+    /// renumber paired releases — the Woodland Walrus / DJ in a Jam pair was posted as S13E11E12
+    /// and again as S13E12E13 — so an episode-number check reads the second post as new content
+    /// and fetches a file that is already there. The titles are what stay the same.
+    ///
+    /// A single release whose title sits wholly inside a pair on disk counts too: a re-post of one
+    /// half of "Woodland Walrus and DJ in a Jam" is already covered by that file.
+    /// </summary>
+    public bool HasEpisodeTitle(string showName, int season, string releaseTitle)
+    {
+        var releaseTokens = FileNameParser.EpisodeTitleTokens(releaseTitle);
+
+        // One distinctive word is too thin to judge on — let the number checks decide.
+        if (releaseTokens.Count < 2) return false;
+
+        var match = MatchShowForEpisode(showName, null);
+        if (match == null) return false;
+
+        foreach (var fileName in match.Episodes
+                     .Where(e => e.Season == season)
+                     .Select(e => e.FileName)
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var fileTokens = FileNameParser.EpisodeTitleTokens(fileName);
+            if (fileTokens.Count < 2) continue;
+
+            var similarity = (double)releaseTokens.Intersect(fileTokens).Count()
+                             / releaseTokens.Union(fileTokens).Count();
+
+            if (similarity >= TitleDuplicateThreshold || releaseTokens.IsSubsetOf(fileTokens))
+            {
+                logger.LogInformation(
+                    "🔁 Release names episode(s) already on disk (similarity {Similarity:F2}): '{Release}' matches '{File}'",
+                    similarity, releaseTitle, fileName);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Does the library already hold this episode — or, for a paired release, every episode it
     /// covers? A partially-held span still returns false: the release is the only way to get the
@@ -541,32 +613,7 @@ public class MediaCatalogService(
     /// </summary>
     public bool HasEpisode(string showName, int season, int episode, int? year = null, int? episodeEnd = null)
     {
-        var shows = db.TvShows.FindAll().ToList();
-
-        TvShow? match = null;
-        if (year.HasValue)
-        {
-            match = shows.FirstOrDefault(s => 
-                FileNameParser.FuzzyMatch(s.Name, showName) >= 0.5 && 
-                s.Year == year);
-
-            if (match == null)
-            {
-                match = shows.FirstOrDefault(s => 
-                    FileNameParser.FuzzyMatch(s.Name, showName) >= 0.5 && 
-                    !s.Year.HasValue);
-            }
-        }
-
-        if (match == null)
-        {
-            match = shows
-                .Where(s => FileNameParser.FuzzyMatch(s.Name, showName) >= 0.5)
-                .OrderByDescending(s => s.Year.HasValue ? 1 : 0)
-                .ThenByDescending(s => s.LatestSeason)
-                .FirstOrDefault();
-        }
-
+        var match = MatchShowForEpisode(showName, year);
         var lastEpisode = Math.Max(episodeEnd ?? episode, episode);
         var hasIt = match != null && Enumerable
             .Range(episode, lastEpisode - episode + 1)

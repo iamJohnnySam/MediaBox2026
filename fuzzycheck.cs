@@ -94,4 +94,28 @@ Debug.Assert(FileNameParser.Parse("Show.S01E01E99.720p.mkv").EpisodeEnd == null)
 // the span must not leak into the show name
 Debug.Assert(FileNameParser.Parse("Paw Patrol S13E01E02 Pups Solve a Snap-N-Wrap Problem 1080p.mkv").CleanName == "Paw Patrol");
 
+// Renumbered duplicate detection works on the episode titles, because the numbers move:
+// EZTV posted the Woodland Walrus / DJ in a Jam pair as S13E11E12, then again as S13E12E13,
+// and the second post read as new content and downloaded a file already on disk.
+var onDisk = FileNameParser.EpisodeTitleTokens("Paw Patrol S13E11E12 Pups Save a Woodland Walrus Pups Save a DJ in a Jam 720p AMZN WEB-DL DDP5 1 H 264-LAZY[EZTVx.to].mkv");
+var repost = FileNameParser.EpisodeTitleTokens("Paw Patrol S13E12E13 Pups Save a Woodland Walrus - Pups Save a DJ in a Jam 1080p AMZN WEB-DL DDP5 1 H 264-LAZY[EZTVx.to].mkv");
+Debug.Assert(onDisk.SetEquals(repost));                       // same content, different numbers
+Debug.Assert(onDisk.Contains("walrus") && onDisk.Contains("woodland") && onDisk.Contains("jam"));
+Debug.Assert(!onDisk.Contains("pups") && !onDisk.Contains("save"));   // boilerplate carries no identity
+Debug.Assert(!onDisk.Contains("720p") && !onDisk.Contains("amzn") && !onDisk.Contains("lazy")); // nor does metadata
+
+// A genuinely new pair must not look like anything on disk.
+var fresh = FileNameParser.EpisodeTitleTokens("Paw Patrol S13E03E04 Pups Save the Orienteers - Pups Save Teatime 1080p AMZN WEB-DL.mkv");
+Debug.Assert(fresh.Intersect(onDisk).Count() == 0);
+// ...and two different "Pups Save the X" titles must not collide on their shared boilerplate.
+var other = FileNameParser.EpisodeTitleTokens("Paw Patrol S13E07E08 Pups Save a Hum-Kicker - Pups Save the One-Man Band 1080p.mkv");
+Debug.Assert(fresh.Intersect(other).Count() == 0);
+
+// A re-post of one half of a pair already on disk is a subset of it, not new content.
+var half = FileNameParser.EpisodeTitleTokens("Paw Patrol S13E11 Pups Save a Woodland Walrus 1080p AMZN WEB-DL.mkv");
+Debug.Assert(half.IsSubsetOf(onDisk) && !half.SetEquals(onDisk));
+
+// A name with no SxxExx tag has no title to compare — callers must fall back to the numbers.
+Debug.Assert(FileNameParser.EpisodeTitleTokens("Paw Patrol Season 13 Complete 1080p.mkv").Count == 0);
+
 Console.WriteLine("ok");
