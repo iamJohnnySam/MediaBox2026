@@ -284,6 +284,14 @@ public class MediaCatalogService(
         var processed = 0;
         var episodesChanged = false;
 
+        // Tombstoning is deferred to the end of the scan. An episode missing from the folder it
+        // used to be in has not necessarily gone: it may have been moved to the show it actually
+        // belongs to, and deciding that needs every filename in the library, not just this
+        // folder's. Splitting Planet Sheen out of Jimmy Neutron wrote 18 tombstones that way,
+        // each one telling the RSS monitor never to fetch an episode that was merely relocated.
+        var allFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pendingTombstones = new List<(TvShow Show, Dictionary<(int, int), string> Previous)>();
+
         logger.LogInformation("📺 Scanning {Count} TV show folders...", totalDirs);
 
         foreach (var dir in directories)
@@ -314,7 +322,9 @@ public class MediaCatalogService(
                 show.Year = year;
                 show.LastScanned = DateTime.UtcNow;
 
-                var previousEpisodes = show.Episodes.Select(e => (e.Season, e.Episode)).ToHashSet();
+                var previousEpisodes = show.Episodes
+                    .GroupBy(e => (e.Season, e.Episode))
+                    .ToDictionary(g => g.Key, g => g.First().FileName);
                 show.Episodes.Clear();
 
                 logger.LogDebug("Scanning files in: {Folder}", folderName);
@@ -325,6 +335,7 @@ public class MediaCatalogService(
                 foreach (var file in files)
                 {
                     fileCount++;
+                    allFileNames.Add(Path.GetFileName(file));
                     var parsed = FileNameParser.Parse(Path.GetFileName(file));
                     if (parsed.Season.HasValue && parsed.Episode.HasValue)
                     {
@@ -363,10 +374,10 @@ public class MediaCatalogService(
                     logger.LogDebug("Scanned {Show}: No episodes found", show.Name);
                 }
 
-                if (isNew || !previousEpisodes.SetEquals(show.Episodes.Select(e => (e.Season, e.Episode))))
+                if (isNew || !previousEpisodes.Keys.ToHashSet().SetEquals(show.Episodes.Select(e => (e.Season, e.Episode))))
                     episodesChanged = true;
 
-                TombstoneRemovedEpisodes(show, previousEpisodes);
+                pendingTombstones.Add((show, previousEpisodes));
 
                 if (isNew)
                     db.TvShows.Insert(show);
@@ -379,6 +390,9 @@ public class MediaCatalogService(
             }
         }
 
+        foreach (var (show, previous) in pendingTombstones)
+            TombstoneRemovedEpisodes(show, previous, allFileNames);
+
         logger.LogInformation("✅ Completed scanning {Total} TV show folders", totalDirs);
         return episodesChanged;
     }
@@ -389,7 +403,10 @@ public class MediaCatalogService(
     /// (RssFeedMonitorService: `db.DispatchedEpisodes.Exists(...)`) suppresses a later
     /// REPACK re-post of the same episode, which HasEpisode can no longer catch.
     /// </summary>
-    private void TombstoneRemovedEpisodes(TvShow show, HashSet<(int Season, int Episode)> previousEpisodes)
+    private void TombstoneRemovedEpisodes(
+        TvShow show,
+        Dictionary<(int Season, int Episode), string> previousEpisodes,
+        HashSet<string> allFileNamesInLibrary)
     {
         // ponytail: a folder that scanned to zero episodes is ambiguous (mid-move, bad
         // permissions, transient mount glitch) and would tombstone the whole show, so skip
@@ -397,10 +414,20 @@ public class MediaCatalogService(
         // that exist, so its stale TvShows row survives and HasEpisode keeps returning true.
         if (show.Episodes.Count == 0) return;
 
-        var removed = previousEpisodes.Except(show.Episodes.Select(e => (e.Season, e.Episode)));
+        var stillHere = show.Episodes.Select(e => (e.Season, e.Episode)).ToHashSet();
+        var removed = previousEpisodes.Where(kv => !stillHere.Contains(kv.Key));
 
-        foreach (var (season, episode) in removed)
+        foreach (var ((season, episode), fileName) in removed)
         {
+            // The file is still in the library, just under a different show — a reorganisation,
+            // not a deletion. Tombstoning it would stop the show it left ever filling the gap.
+            if (!string.IsNullOrEmpty(fileName) && allFileNamesInLibrary.Contains(fileName))
+            {
+                logger.LogInformation("↪️ Episode moved elsewhere in the library, not tombstoned: {Show} S{Season}E{Episode} ({File})",
+                    show.Name, season, episode, fileName);
+                continue;
+            }
+
             // ponytail: exact name match, same as the RSS monitor's own dispatched lookup —
             // fuzzy matching here would only help if the two ever disagree, which they don't
             // today (both names come out of FileNameParser).
