@@ -105,6 +105,38 @@ public class MediaDatabase : IDisposable
         _logger.LogInformation("✅ SQLite database fully initialized at {Path}", dbPath);
     }
 
+    /// <summary>
+    /// Is every episode of this release already tombstoned? A paired release ("S13E01E02") spans
+    /// two episodes and a tombstone covers one, so asking about the first number alone lets the
+    /// pair through a second time under a tracker's shifted numbering.
+    /// </summary>
+    public bool AllEpisodesDispatched(string showName, int season, int episode, int? episodeEnd = null)
+    {
+        var last = Math.Max(episodeEnd ?? episode, episode);
+        var rows = DispatchedEpisodes.Find(d => d.ShowName == showName && d.Season == season).ToList();
+        return Enumerable.Range(episode, last - episode + 1)
+            .All(ep => rows.Any(d => d.Episode == ep));
+    }
+
+    /// <summary>Tombstone every episode a release covers, skipping numbers already recorded.</summary>
+    public void InsertDispatchedRange(string showName, int season, int episode, int? episodeEnd = null)
+    {
+        var last = Math.Max(episodeEnd ?? episode, episode);
+        for (var ep = episode; ep <= last; ep++)
+        {
+            if (DispatchedEpisodes.Exists(d => d.ShowName == showName && d.Season == season && d.Episode == ep))
+                continue;
+
+            DispatchedEpisodes.Insert(new DispatchedEpisode
+            {
+                ShowName = showName,
+                Season = season,
+                Episode = ep,
+                DispatchedDate = DateTime.UtcNow
+            });
+        }
+    }
+
     private void MigrateFromLiteDb(string dbPath)
     {
         if (!File.Exists(dbPath)) return;

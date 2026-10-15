@@ -315,12 +315,19 @@ public class MediaCatalogService(
                     var parsed = FileNameParser.Parse(Path.GetFileName(file));
                     if (parsed.Season.HasValue && parsed.Episode.HasValue)
                     {
-                        show.Episodes.Add(new EpisodeInfo
+                        // A paired release ("S13E01E02") is ONE file holding two aired episodes.
+                        // Record a row per episode: HasEpisode answers one number at a time, so
+                        // without the second row the RSS monitor reads E02 as missing and fetches
+                        // the very same file again under whatever numbering the tracker used.
+                        for (var ep = parsed.Episode.Value; ep <= (parsed.EpisodeEnd ?? parsed.Episode.Value); ep++)
                         {
-                            Season = parsed.Season.Value,
-                            Episode = parsed.Episode.Value,
-                            FileName = Path.GetFileName(file)
-                        });
+                            show.Episodes.Add(new EpisodeInfo
+                            {
+                                Season = parsed.Season.Value,
+                                Episode = ep,
+                                FileName = Path.GetFileName(file)
+                            });
+                        }
                     }
                 }
 
@@ -527,7 +534,12 @@ public class MediaCatalogService(
         }
     }
 
-    public bool HasEpisode(string showName, int season, int episode, int? year = null)
+    /// <summary>
+    /// Does the library already hold this episode — or, for a paired release, every episode it
+    /// covers? A partially-held span still returns false: the release is the only way to get the
+    /// episodes that are missing, and taking a duplicate of one is cheaper than never getting them.
+    /// </summary>
+    public bool HasEpisode(string showName, int season, int episode, int? year = null, int? episodeEnd = null)
     {
         var shows = db.TvShows.FindAll().ToList();
 
@@ -555,9 +567,12 @@ public class MediaCatalogService(
                 .FirstOrDefault();
         }
 
-        var hasIt = match?.Episodes.Any(e => e.Season == season && e.Episode == episode) ?? false;
-        logger.LogInformation("HasEpisode check: {ShowName} S{Season}E{Episode} (year: {Year}) - Matched folder: '{Match}' (year: {MatchYear}, score: {Score}), HasIt: {HasIt}", 
-            showName, season, episode, year, match?.Name ?? "none", match?.Year,
+        var lastEpisode = Math.Max(episodeEnd ?? episode, episode);
+        var hasIt = match != null && Enumerable
+            .Range(episode, lastEpisode - episode + 1)
+            .All(ep => match.Episodes.Any(e => e.Season == season && e.Episode == ep));
+        logger.LogInformation("HasEpisode check: {ShowName} S{Season}E{Episode}-E{EpisodeEnd} (year: {Year}) - Matched folder: '{Match}' (year: {MatchYear}, score: {Score}), HasIt: {HasIt}", 
+            showName, season, episode, lastEpisode, year, match?.Name ?? "none", match?.Year,
             match != null ? FileNameParser.FuzzyMatch(match.Name, showName) : 0, hasIt);
         return hasIt;
     }

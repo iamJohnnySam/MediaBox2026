@@ -28,6 +28,9 @@ public static partial class FileNameParser
         "UIndex.org"
 	];
 
+    /// <summary>Widest episode span accepted from a paired filename before it reads as a mis-parse.</summary>
+    private const int MaxEpisodeSpan = 10;
+
     public static ParsedMediaInfo Parse(string fileName)
     {
         var info = new ParsedMediaInfo { OriginalFileName = fileName };
@@ -54,6 +57,17 @@ public static partial class FileNameParser
             {
                 info.Season = int.Parse(match.Groups[1].Value);
                 info.Episode = int.Parse(match.Groups[2].Value);
+
+                // Only SeasonEpisodeRegex1 carries the optional second number ("S13E01E02"):
+                // one file, two aired episodes. Keep the span — see ParsedMediaInfo.EpisodeEnd.
+                if (match.Groups.Count > 3 && match.Groups[3].Success)
+                {
+                    var end = int.Parse(match.Groups[3].Value);
+                    // A pair or a short run is real; a wide span is a mis-parse, not a multi-episode file.
+                    if (end > info.Episode && end - info.Episode <= MaxEpisodeSpan)
+                        info.EpisodeEnd = end;
+                }
+
                 baseName = baseName[..match.Index];
                 break;
             }
@@ -216,7 +230,9 @@ public static partial class FileNameParser
     [GeneratedRegex(@"\b(\d{3,4})p\b", RegexOptions.IgnoreCase)]
     private static partial Regex QualityRegex();
 
-    [GeneratedRegex(@"S(\d{1,2})E(\d{1,3})", RegexOptions.IgnoreCase)]
+    // The trailing group is optional and the literal "E" is mandatory: without it,
+    // "Paw.Patrol.S08E29.720p" would read 720 as the closing episode number.
+    [GeneratedRegex(@"S(\d{1,2})E(\d{1,3})(?:[-._\s]*E(\d{1,3}))?", RegexOptions.IgnoreCase)]
     private static partial Regex SeasonEpisodeRegex1();
 
     [GeneratedRegex(@"S(\d{1,2})\s+E(\d{1,3})", RegexOptions.IgnoreCase)]

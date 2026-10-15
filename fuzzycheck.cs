@@ -73,4 +73,25 @@ Debug.Assert(!TransmissionMonitorService.ShouldRepark(new DateTime(2026, 8, 14, 
 Debug.Assert(TransmissionMonitorService.FormatSize(714_663_936) == "682 MB");
 Debug.Assert(TransmissionMonitorService.FormatSize(1_594_641_057) == "1.49 GB");
 
+// A paired release is ONE file holding two aired episodes ("S13E01E02"). Both numbers have to
+// survive, or MediaCatalogService records only the first, HasEpisode reports the second missing,
+// and the RSS monitor fetches the same file again under whatever numbering the tracker used.
+var pair = FileNameParser.Parse("Paw Patrol S13E01E02 Pups Solve a Snap-N-Wrap Problem - Pups Save Helga and Dingers 1080p NF WEB-DL DDP5 1 x264-LAZY[EZTVx.to].mkv");
+Debug.Assert(pair.Season == 13 && pair.Episode == 1 && pair.EpisodeEnd == 2);
+Debug.Assert(FileNameParser.Parse("Paw Patrol S12E13E14 Pups Save a Haunted Farm - Pups Save the Adventure Bay Boogie 1080p.mkv").EpisodeEnd == 14);
+Debug.Assert(FileNameParser.Parse("Show.S01E01-E02.720p.mkv").EpisodeEnd == 2);   // dash-separated
+Debug.Assert(FileNameParser.Parse("Show.S01E01 E02.720p.mkv").EpisodeEnd == 2);   // space-separated
+
+// A single episode must stay single. The quality tag is the trap: the second number is only read
+// when a literal "E" precedes it, or "S08E29.720p" would close the span at episode 720.
+Debug.Assert(FileNameParser.Parse("Paw.Patrol.S08E29.720p.NF.WEBRip.x264-GalaxyTV.mkv").Episode == 29);
+Debug.Assert(FileNameParser.Parse("Paw.Patrol.S08E29.720p.NF.WEBRip.x264-GalaxyTV.mkv").EpisodeEnd == null);
+Debug.Assert(FileNameParser.Parse("Futurama.S14E03.480p.x264-mSD[EZTVx.to].mkv").EpisodeEnd == null);
+Debug.Assert(FileNameParser.Parse("PAW.Patrol.S01E01.Pups.and.the.Kitty-tastrophe.720p.mp4").EpisodeEnd == null);
+// a backwards or absurdly wide span is a mis-parse, not a multi-episode file
+Debug.Assert(FileNameParser.Parse("Show.S01E05E02.720p.mkv").EpisodeEnd == null);
+Debug.Assert(FileNameParser.Parse("Show.S01E01E99.720p.mkv").EpisodeEnd == null);
+// the span must not leak into the show name
+Debug.Assert(FileNameParser.Parse("Paw Patrol S13E01E02 Pups Solve a Snap-N-Wrap Problem 1080p.mkv").CleanName == "Paw Patrol");
+
 Console.WriteLine("ok");

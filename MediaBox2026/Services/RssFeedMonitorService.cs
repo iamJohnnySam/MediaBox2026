@@ -206,9 +206,9 @@ public class RssFeedMonitorService(
                     continue;
                 }
 
-                if (catalog.HasEpisode(parsed.CleanName, parsed.Season.Value, parsed.Episode!.Value, parsed.Year))
+                if (catalog.HasEpisode(parsed.CleanName, parsed.Season.Value, parsed.Episode!.Value, parsed.Year, parsed.EpisodeEnd))
                 {
-                    logger.LogInformation("Skipping existing episode: {Title} (already have S{Season}E{Episode})", title, parsed.Season.Value, parsed.Episode.Value);
+                    logger.LogInformation("Skipping existing episode: {Title} (already have S{Season}E{Episode}-E{EpisodeEnd})", title, parsed.Season.Value, parsed.Episode.Value, parsed.EpisodeEnd ?? parsed.Episode.Value);
                     MarkProcessed(guid, title);
                     continue;
                 }
@@ -218,9 +218,10 @@ public class RssFeedMonitorService(
                 logger.LogDebug("No existing show found for: {CleanName}", parsed.CleanName);
             }
 
-            // Already dispatched to Transmission for this episode — skip duplicates from different release groups
-            if (db.DispatchedEpisodes.Exists(d =>
-                d.ShowName == parsed.CleanName && d.Season == parsed.Season!.Value && d.Episode == parsed.Episode!.Value))
+            // Already dispatched to Transmission for this episode — skip duplicates from different release groups.
+            // Span-aware: trackers renumber paired releases (the same two segments posted as S13E11E12
+            // and again as S13E12E13), and matching on the first number alone lets the second copy in.
+            if (db.AllEpisodesDispatched(parsed.CleanName, parsed.Season!.Value, parsed.Episode!.Value, parsed.EpisodeEnd))
             {
                 logger.LogDebug("Skipping already dispatched: {Title}", title);
                 MarkProcessed(guid, title);
@@ -238,13 +239,7 @@ public class RssFeedMonitorService(
                 {
                     await telegram.SendMessageAsync($"📥 New download: {title}", ct);
                     state.AddActivity($"Started download: {title}");
-                    db.DispatchedEpisodes.Insert(new DispatchedEpisode
-                    {
-                        ShowName = parsed.CleanName,
-                        Season = parsed.Season!.Value,
-                        Episode = parsed.Episode!.Value,
-                        DispatchedDate = DateTime.UtcNow
-                    });
+                    db.InsertDispatchedRange(parsed.CleanName, parsed.Season!.Value, parsed.Episode!.Value, parsed.EpisodeEnd);
 
                     // This acceptable-quality release supersedes any pending high-quality prompt
                     // for the same episode: mark it resolved and cancel the Telegram prompt.
@@ -294,6 +289,7 @@ public class RssFeedMonitorService(
                         ShowName = parsed.CleanName,
                         Season = parsed.Season!.Value,
                         Episode = parsed.Episode!.Value,
+                        EpisodeEnd = parsed.EpisodeEnd,
                         FirstSeen = DateTime.UtcNow,
                         RssPublishDate = rssPublishDate,
                         CheckCount = 1,
@@ -308,8 +304,8 @@ public class RssFeedMonitorService(
                             quality, elapsed.TotalHours, waitHours, title);
 
                         // Check if already in library or dispatched before notifying
-                        bool alreadyHave = catalog.HasEpisode(parsed.CleanName, parsed.Season!.Value, parsed.Episode!.Value, null) ||
-                                         db.DispatchedEpisodes.Exists(d => d.ShowName == parsed.CleanName && d.Season == parsed.Season && d.Episode == parsed.Episode);
+                        bool alreadyHave = catalog.HasEpisode(parsed.CleanName, parsed.Season!.Value, parsed.Episode!.Value, null, parsed.EpisodeEnd) ||
+                                         db.AllEpisodesDispatched(parsed.CleanName, parsed.Season!.Value, parsed.Episode!.Value, parsed.EpisodeEnd);
 
                         if (!alreadyHave)
                         {
@@ -376,7 +372,7 @@ public class RssFeedMonitorService(
                 item.RssTitle, item.Quality, elapsed.TotalHours, item.LastAsked?.ToString("yyyy-MM-dd HH:mm") ?? "Never");
 
             // Check if episode was downloaded since this pending item was created
-            if (catalog.HasEpisode(item.ShowName, item.Season, item.Episode, null))
+            if (catalog.HasEpisode(item.ShowName, item.Season, item.Episode, null, item.EpisodeEnd))
             {
                 alreadyHave++;
                 logger.LogInformation("✅ Episode already in library, updating pending and editing message: {Title}", item.RssTitle);
@@ -395,8 +391,7 @@ public class RssFeedMonitorService(
             }
 
             // Check if episode was dispatched (downloaded via Transmission) since this pending item was created
-            if (db.DispatchedEpisodes.Exists(d =>
-                d.ShowName == item.ShowName && d.Season == item.Season && d.Episode == item.Episode))
+            if (db.AllEpisodesDispatched(item.ShowName, item.Season, item.Episode, item.EpisodeEnd))
             {
                 alreadyHave++;
                 logger.LogInformation("✅ Episode already dispatched, updating pending and editing message: {Title}", item.RssTitle);
@@ -617,13 +612,7 @@ public class RssFeedMonitorService(
                                 }
 
                                 state.AddActivity($"Quality-approved download: {item.RssTitle}");
-                                db.DispatchedEpisodes.Insert(new DispatchedEpisode
-                                {
-                                    ShowName = item.ShowName,
-                                    Season = item.Season,
-                                    Episode = item.Episode,
-                                    DispatchedDate = DateTime.UtcNow
-                                });
+                                db.InsertDispatchedRange(item.ShowName, item.Season, item.Episode, item.EpisodeEnd);
                             }
                         }
                         else if (result == "no")
@@ -755,13 +744,7 @@ public class RssFeedMonitorService(
                             }
 
                             state.AddActivity($"Quality-approved download: {item.RssTitle}");
-                            db.DispatchedEpisodes.Insert(new DispatchedEpisode
-                            {
-                                ShowName = item.ShowName,
-                                Season = item.Season,
-                                Episode = item.Episode,
-                                DispatchedDate = DateTime.UtcNow
-                            });
+                            db.InsertDispatchedRange(item.ShowName, item.Season, item.Episode, item.EpisodeEnd);
                         }
                     }
                     else if (result == "no")
@@ -923,11 +906,8 @@ public class RssFeedMonitorService(
                     quality, title, pendingMatch.RssTitle);
 
                 // Final safety: confirm not already dispatched or in library
-                if (db.DispatchedEpisodes.Exists(d =>
-                        d.ShowName == pendingMatch.ShowName &&
-                        d.Season   == pendingMatch.Season  &&
-                        d.Episode  == pendingMatch.Episode) ||
-                    catalog.HasEpisode(pendingMatch.ShowName, pendingMatch.Season, pendingMatch.Episode, null))
+                if (db.AllEpisodesDispatched(pendingMatch.ShowName, pendingMatch.Season, pendingMatch.Episode, pendingMatch.EpisodeEnd) ||
+                    catalog.HasEpisode(pendingMatch.ShowName, pendingMatch.Season, pendingMatch.Episode, null, pendingMatch.EpisodeEnd))
                 {
                     logger.LogInformation("Episode already dispatched/in library, marking pending resolved: {Title}", pendingMatch.RssTitle);
                     pendingMatch.Status = PendingStatus.Downloaded;
@@ -944,13 +924,7 @@ public class RssFeedMonitorService(
                         $"📥 Better quality found on fallback feed ({quality}): {title}", ct);
                     state.AddActivity($"Fallback quality download: {title}");
 
-                    db.DispatchedEpisodes.Insert(new DispatchedEpisode
-                    {
-                        ShowName = pendingMatch.ShowName,
-                        Season   = pendingMatch.Season,
-                        Episode  = pendingMatch.Episode,
-                        DispatchedDate = DateTime.UtcNow
-                    });
+                    db.InsertDispatchedRange(pendingMatch.ShowName, pendingMatch.Season, pendingMatch.Episode, pendingMatch.EpisodeEnd);
 
                     pendingMatch.Status = PendingStatus.Downloaded;
                     db.PendingDownloads.Update(pendingMatch);
@@ -990,17 +964,7 @@ public class RssFeedMonitorService(
         item.Status = PendingStatus.Downloaded;
         db.PendingDownloads.Update(item);
 
-        if (!db.DispatchedEpisodes.Exists(d =>
-                d.ShowName == item.ShowName && d.Season == item.Season && d.Episode == item.Episode))
-        {
-            db.DispatchedEpisodes.Insert(new DispatchedEpisode
-            {
-                ShowName = item.ShowName,
-                Season = item.Season,
-                Episode = item.Episode,
-                DispatchedDate = DateTime.UtcNow
-            });
-        }
+        db.InsertDispatchedRange(item.ShowName, item.Season, item.Episode, item.EpisodeEnd);
     }
 
     /// <summary>

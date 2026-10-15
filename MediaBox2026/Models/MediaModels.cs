@@ -86,6 +86,9 @@ public class PendingDownload : IEntity
     public string ShowName { get; set; } = "";
     public int Season { get; set; }
     public int Episode { get; set; }
+
+    /// <summary>Last episode when this release is a pair (see ParsedMediaInfo.EpisodeEnd). Null = single.</summary>
+    public int? EpisodeEnd { get; set; }
     public DateTime FirstSeen { get; set; }
     public DateTime? RssPublishDate { get; set; }
     public int CheckCount { get; set; }
@@ -168,6 +171,13 @@ public class ParsedMediaInfo
     public int? Year { get; set; }
     public int? Season { get; set; }
     public int? Episode { get; set; }
+
+    /// <summary>
+    /// Last episode of a paired release — "S13E01E02" parses to Episode 1, EpisodeEnd 2.
+    /// Null for an ordinary single-episode file. One file, two aired episodes: both numbers
+    /// have to survive parsing or the second reads as missing and gets re-downloaded.
+    /// </summary>
+    public int? EpisodeEnd { get; set; }
     public string? Quality { get; set; }
     public bool IsTvShow => Season.HasValue && Episode.HasValue;
     public string OriginalFileName { get; set; } = "";
