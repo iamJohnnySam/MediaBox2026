@@ -15,20 +15,24 @@ Three things are deliberately NOT treated as duplicates:
 
 Choosing which copy to keep:
 
-  KEEP-LARGEST is the default and is right for most rows, but NOT universally. In this
-  library the We Bare Bears S04 1080p files are SMALLER than their 720p counterparts
-  (x265 vs h264), so keep-largest throws away the 1080p copy. Rows where the two files
-  differ in advertised resolution are therefore reported but SKIPPED unless you pass
-  --include-mixed-resolution, and --prefer-resolution keeps the highest advertised
-  resolution instead of the biggest file.
+  Each candidate is PROBED with ffprobe, because filenames lie: "1080p" in a name may be
+  an upscale, and a bigger file is not a better one. In this library the We Bare Bears S04
+  1080p x265 files are half the size of their 720p h264 twins and are still the better copy.
+
+  Ranked on, in order:
+    1. real picture height from the video stream
+    2. codec generation  - AV1 / HEVC > H.264 > MPEG-4 ASP (XviD, DivX) > older
+    3. bits per pixel per second, so a thin encode at a given size loses
+    4. audio channels, then container - mkv > mp4 > avi
+  A corrected re-release (PROPER, REPACK, FIXED, __fixaudio) wins among copies of equal
+  height: it exists because the first one was broken.
 
 Usage:
     python3 prune_duplicate_episodes.py                      # report
-    python3 prune_duplicate_episodes.py --apply              # delete, same-resolution rows only
-    python3 prune_duplicate_episodes.py --prefer-resolution --include-mixed-resolution --apply
+    python3 prune_duplicate_episodes.py --apply              # delete the lesser copies
     python3 prune_duplicate_episodes.py --identical-only --apply   # only byte-identical copies
 """
-import argparse, collections, hashlib, os, re, sys
+import argparse, collections, hashlib, json, os, re, shutil, subprocess, sys
 
 TV_ROOT = "/molecule/Media/TVShows"
 VIDEO = {'.mkv', '.mp4', '.avi', '.m4v', '.webm', '.flv', '.ts', '.mov', '.mpg', '.mpeg', '.wmv'}
@@ -88,9 +92,78 @@ def show_filler(names):
     return {w for w, c in freq.items() if c > limit}
 
 
-def resolution(name):
-    m = QUAL.search(name)
-    return int(m.group(1)) if m else None
+# Newer generations encode the same picture in fewer bits, so at equal height the later
+# codec is the better copy, not the bigger file.
+CODEC_RANK = {'av1': 4, 'hevc': 4, 'h265': 4, 'vp9': 3, 'h264': 2, 'avc1': 2,
+              'mpeg4': 1, 'msmpeg4v3': 1, 'vc1': 1, 'mpeg2video': 0, 'mpeg1video': 0}
+
+# Roughly how far each codec stretches a bit, relative to H.264. Codec generation alone is
+# not quality: x265 at 0.7 Mb/s is a thinner 720p than x264 at 3.0 Mb/s, so bitrates are
+# normalised by this before being compared.
+CODEC_EFFICIENCY = {'av1': 2.0, 'hevc': 1.8, 'h265': 1.8, 'vp9': 1.6, 'h264': 1.0,
+                    'avc1': 1.0, 'mpeg4': 0.6, 'msmpeg4v3': 0.6, 'vc1': 0.8,
+                    'mpeg2video': 0.5, 'mpeg1video': 0.4}
+CONTAINER_RANK = {'.mkv': 2, '.mp4': 1, '.m4v': 1, '.avi': 0, '.mpg': 0, '.mpeg': 0, '.wmv': 0}
+
+
+def probe(path):
+    """Real stream facts, or None if ffprobe cannot read the file."""
+    try:
+        out = subprocess.run(
+            ['ffprobe', '-v', 'error', '-print_format', 'json',
+             '-show_entries', 'format=duration,size,bit_rate'
+             ':stream=codec_type,codec_name,height,width,channels',
+             path],
+            capture_output=True, text=True, timeout=120).stdout
+        d = json.loads(out)
+    except Exception:
+        return None
+
+    video = next((s for s in d.get('streams', []) if s.get('codec_type') == 'video'), None)
+    if not video:
+        return None
+    audio = [s for s in d.get('streams', []) if s.get('codec_type') == 'audio']
+    fmt = d.get('format', {})
+    size = int(fmt.get('size') or os.path.getsize(path))
+    duration = float(fmt.get('duration') or 0) or None
+    height = int(video.get('height') or 0)
+    width = int(video.get('width') or 0)
+    bitrate = (size * 8 / duration) if duration else 0
+    codec = (video.get('codec_name') or '').lower()
+    # Codec-normalised bits per pixel: what the encode is actually worth at this picture size.
+    effective = bitrate * CODEC_EFFICIENCY.get(codec, 1.0)
+    bpps = effective / (width * height) if width and height else 0
+
+    return {
+        'height': height,
+        'width': width,
+        'codec': (video.get('codec_name') or '').lower(),
+        'codec_rank': CODEC_RANK.get((video.get('codec_name') or '').lower(), 0),
+        'bitrate': bitrate,
+        'bpps': bpps,
+        'channels': max((int(a.get('channels') or 0) for a in audio), default=0),
+        'container': CONTAINER_RANK.get(os.path.splitext(path)[1].lower(), 0),
+        'size': size,
+        'duration': duration,
+    }
+
+
+def quality_key(path, info):
+    """
+    Higher is better. Picture height first -- more resolution is the thing being asked for.
+    Within one height a corrected re-release wins, then the codec-normalised encode weight,
+    then audio channels and container. Codec generation is only the final tiebreak, because
+    a modern codec starved of bits is not the better copy.
+    """
+    corrected = 1 if PREFERRED.search(os.path.basename(path)) else 0
+    return (info['height'], corrected, round(info['bpps'], 4),
+            info['channels'], info['container'], info['codec_rank'], info['size'])
+
+
+def describe(info):
+    br = f"{info['bitrate']/1_000_000:.1f} Mb/s" if info['bitrate'] else "? Mb/s"
+    ch = f"{info['channels']}ch" if info['channels'] else "no audio"
+    return f"{info['width']}x{info['height']} {info['codec']} {br} {ch} {info['size']/2**20:.0f}MB"
 
 
 def md5(path, limit=None):
@@ -115,10 +188,6 @@ def sidecars(video):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--apply', action='store_true', help='actually delete')
-    ap.add_argument('--prefer-resolution', action='store_true',
-                    help='keep the highest advertised resolution instead of the largest file')
-    ap.add_argument('--include-mixed-resolution', action='store_true',
-                    help='also act on rows whose copies advertise different resolutions')
     ap.add_argument('--identical-only', action='store_true',
                     help='only act on byte-identical copies (md5 verified)')
     args = ap.parse_args()
@@ -140,7 +209,7 @@ def main():
     for key, paths in claims.items():
         all_in_show[key[0]].update(paths)
 
-    rows, skipped_mixed, collisions, freed = [], [], [], 0
+    rows, skipped_mixed, collisions, unreadable, runtimes, freed = [], [], [], [], [], 0
     for key, paths in sorted(claims.items()):
         paths = sorted(set(paths))
         if len(paths) < 2:
@@ -161,42 +230,44 @@ def main():
                 collisions.append((key, distinct))
                 continue
 
-        entries = [(os.path.getsize(p), resolution(os.path.basename(p)), p) for p in paths]
-        res = [r for _, r, _ in entries if r]
-        mixed = len(set(res)) > 1
+        probed = []
+        for pth in paths:
+            info = probe(pth)
+            if info is None:
+                unreadable.append(pth)
+            else:
+                probed.append((pth, info))
 
-        if args.prefer_resolution and res:
-            entries.sort(key=lambda e: (e[1] or 0, e[0]), reverse=True)
-        else:
-            entries.sort(reverse=True)
+        if len(probed) < 2:
+            continue                                    # cannot compare what cannot be read
 
-        # A corrected re-release outranks size.
-        corrected = [e for e in entries if PREFERRED.search(os.path.basename(e[2]))]
-        if corrected and len(corrected) < len(entries):
-            entries = corrected + [e for e in entries if e not in corrected]
+        probed.sort(key=lambda pi: quality_key(*pi), reverse=True)
+        keep, drop = probed[0], probed[1:]
 
-        keep, drop = entries[0], entries[1:]
-        identical = len({sz for sz, _, _ in entries}) == 1 and md5(keep[2]) == md5(drop[0][2])
+        identical = (len({i['size'] for _, i in probed}) == 1
+                     and md5(keep[0]) == md5(drop[0][0]))
 
-        if args.identical_only and not identical:
-            continue
-        if mixed and not args.include_mixed_resolution:
-            skipped_mixed.append((key, entries))
+        # Copies of materially different length are not interchangeable: one may be a
+        # different cut, hold two segments, or simply be truncated. Never guessed at.
+        durations = [i['duration'] for _, i in probed if i['duration']]
+        if durations and max(durations) - min(durations) > 120:
+            runtimes.append((key, probed))
             continue
 
         note = ''
-        if keep[1] is None and any(r for _, r, _ in drop):
-            note = '  [CHECK: the copy being dropped advertises a resolution, the kept one does not]'
+
         rows.append((key, keep, drop, identical, note))
-        freed += sum(sz for sz, _, _ in drop)
+        freed += sum(i['size'] for _, i in drop)
 
     for (show, s, ep), keep, drop, identical, note in rows:
         print(f"{show} S{s:02d}E{ep:02d}" + ("   [byte-identical]" if identical else "") + note)
-        print(f"   keep  {keep[0]/2**20:7.0f} MB  {os.path.basename(keep[2])}")
-        for sz, _, p in drop:
-            print(f"   DROP  {sz/2**20:7.0f} MB  {os.path.basename(p)}")
-            for sc in sidecars(p):
-                print(f"         + sidecar      {os.path.basename(sc)}")
+        print(f"   keep  {describe(keep[1])}")
+        print(f"         {os.path.basename(keep[0])}")
+        for pth, info in drop:
+            print(f"   DROP  {describe(info)}")
+            print(f"         {os.path.basename(pth)}")
+            for sc in sidecars(pth):
+                print(f"         + sidecar {os.path.basename(sc)}")
 
     if collisions:
         print(f"\nSKIPPED {len(collisions)} rows that are NOT duplicates -- two different episodes")
@@ -207,13 +278,20 @@ def main():
                 print(f"      {os.path.basename(p)[:72]}")
                 print(f"         names: {' '.join(sorted(toks)) or '(no title)'}")
 
-    if skipped_mixed:
-        print(f"\nSKIPPED {len(skipped_mixed)} rows whose copies advertise different resolutions.")
-        print("Check these by hand -- a smaller file is often the better encode:")
-        for (show, s, ep), entries in skipped_mixed:
-            desc = " | ".join(f"{r or '?'}p {sz/2**20:.0f}MB" for sz, r, _ in entries)
-            print(f"   {show} S{s:02d}E{ep:02d}: {desc}")
-        print("   re-run with --include-mixed-resolution (and probably --prefer-resolution) to act on them")
+    if runtimes:
+        print(f"\nSKIPPED {len(runtimes)} rows whose copies differ by more than two minutes of")
+        print("runtime -- a different cut, a paired file, or a truncated download. Check by hand:")
+        for (show, s_, ep), probed in runtimes:
+            print(f"   {show} S{s_:02d}E{ep:02d}")
+            for pth, info in probed:
+                mins = f"{(info['duration'] or 0)/60:.1f} min"
+                print(f"      {mins:>9}  {describe(info)}")
+                print(f"                 {os.path.basename(pth)[:72]}")
+
+    if unreadable:
+        print(f"\nffprobe could not read {len(unreadable)} file(s); their rows were left alone:")
+        for pth in unreadable:
+            print(f"   {os.path.basename(pth)[:76]}")
 
     print(f"\n{len(rows)} rows actionable, {freed/2**30:.2f} GB would be freed")
 
@@ -223,7 +301,7 @@ def main():
 
     removed = 0
     for _, _, drop, _, _ in rows:
-        for _, _, p in drop:
+        for p, _ in drop:
             for sc in sidecars(p):
                 if os.path.isdir(sc):
                     import shutil; shutil.rmtree(sc)
