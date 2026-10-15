@@ -44,7 +44,16 @@ public class JellyfinClient(
                 try
                 {
                     using var request = new HttpRequestMessage(HttpMethod.Post, url);
-                    request.Headers.Add("X-Emby-Token", config.JellyfinApiKey);
+
+                    // Jellyfin 12 (installed here 2026-09-08, upgraded from 10.11) dropped the
+                    // legacy token headers. Against 12.2.0 only this scheme authenticates:
+                    //   X-Emby-Token         -> 401
+                    //   X-MediaBrowser-Token -> 401
+                    //   ?api_key=            -> 401
+                    //   Authorization: MediaBrowser Token="..."  -> 204
+                    // The key itself was never the problem, so re-issuing one will not help.
+                    request.Headers.TryAddWithoutValidation(
+                        "Authorization", $"MediaBrowser Token=\"{config.JellyfinApiKey}\"");
 
                     var response = await http.SendAsync(request, ct);
                     if (response.IsSuccessStatusCode)
@@ -53,7 +62,10 @@ public class JellyfinClient(
                         return;
                     }
 
-                    logger.LogWarning("Jellyfin library scan failed: {Status}", response.StatusCode);
+                    // Error, not Warning: CrashReporter forwards error logs to Telegram, and a
+                    // library scan that silently stopped working went unnoticed for five weeks.
+                    logger.LogError("Jellyfin library scan failed: {Status} ({Url}). Check the API key and that the auth scheme still matches the server version.",
+                        response.StatusCode, url);
                     return;
                 }
                 catch (HttpRequestException ex) when (attempt < maxAttempts)
