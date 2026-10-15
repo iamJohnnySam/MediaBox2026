@@ -9,6 +9,7 @@ public class MediaCatalogService(
     IOptionsMonitor<MediaBoxSettings> settings,
     MediaBoxState state,
     ITelegramNotifier telegram,
+    JellyfinClient jellyfin,
     ILogger<MediaCatalogService> logger)
 {
     private readonly SemaphoreSlim _scanLock = new(1, 1);
@@ -23,7 +24,7 @@ public class MediaCatalogService(
             logger.LogInformation("🚀 Starting full media scan at {Time}...", startTime.ToString("HH:mm:ss"));
 
             logger.LogInformation("Step 1/3: Scanning TV shows...");
-            ScanTvShows();
+            var episodesChanged = ScanTvShows();
 
             logger.LogInformation("Step 2/3: Scanning movies...");
             ScanMovies();
@@ -52,6 +53,16 @@ public class MediaCatalogService(
 
             logger.LogInformation("📅 Starting year fixing process...");
             await FixFoldersWithoutYears(ct);
+
+            // Files renamed or moved by hand are invisible to Jellyfin until something tells it
+            // to look — it keeps serving the old paths. This scan is the moment we know the
+            // episodes on disk changed, and JellyfinClient has its own 10-minute cooldown, so a
+            // quiet scan that found nothing new triggers nothing.
+            if (episodesChanged)
+            {
+                logger.LogInformation("📚 Episodes on disk changed — asking Jellyfin to rescan");
+                await jellyfin.TriggerLibraryScanAsync(ct);
+            }
 
             var totalDuration = (DateTime.Now - startTime).TotalSeconds;
             logger.LogInformation("🎉 All scan operations complete in {Duration:F1}s", totalDuration);
@@ -262,14 +273,16 @@ public class MediaCatalogService(
         }
     }
 
-    private void ScanTvShows()
+    /// <summary>Scans the TV library. Returns true when any show's episodes changed on disk.</summary>
+    private bool ScanTvShows()
     {
         var path = settings.CurrentValue.TvShowsPath;
-        if (!Directory.Exists(path)) return;
+        if (!Directory.Exists(path)) return false;
 
         var directories = Directory.GetDirectories(path);
         var totalDirs = directories.Length;
         var processed = 0;
+        var episodesChanged = false;
 
         logger.LogInformation("📺 Scanning {Count} TV show folders...", totalDirs);
 
@@ -350,6 +363,9 @@ public class MediaCatalogService(
                     logger.LogDebug("Scanned {Show}: No episodes found", show.Name);
                 }
 
+                if (isNew || !previousEpisodes.SetEquals(show.Episodes.Select(e => (e.Season, e.Episode))))
+                    episodesChanged = true;
+
                 TombstoneRemovedEpisodes(show, previousEpisodes);
 
                 if (isNew)
@@ -364,6 +380,7 @@ public class MediaCatalogService(
         }
 
         logger.LogInformation("✅ Completed scanning {Total} TV show folders", totalDirs);
+        return episodesChanged;
     }
 
     /// <summary>

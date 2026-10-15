@@ -114,6 +114,21 @@ Debug.Assert(FileNameParser.Parse("Show.S01E05-2160p.WEB.mkv").EpisodeEnd == nul
 Debug.Assert(FileNameParser.Parse("Show.S01E05-4K.WEB.mkv").EpisodeEnd == null);
 Debug.Assert(FileNameParser.Parse("Show.S01E05-2CH.x265.mkv").EpisodeEnd == null);
 
+// "Ep. 02-03" is a paired file in the same sense as "S13E01E02".
+Debug.Assert(FileNameParser.Parse("PLANET SHEEN - Ep. 02-03 - Is This Cute and The Boy Next Dorkus (720p - Web-DL).mp4").Episode == 2);
+Debug.Assert(FileNameParser.Parse("PLANET SHEEN - Ep. 02-03 - Is This Cute and The Boy Next Dorkus (720p - Web-DL).mp4").EpisodeEnd == 3);
+Debug.Assert(FileNameParser.Parse("PLANET SHEEN - Ep. 50 - Banana Quest (720p - Web-DL).mp4").EpisodeEnd == null);
+
+// An uppercase "SxxXnn" is a short or webisode in this library, not episode nn. Reading
+// "The Office S09X01 Retrospective" as S09E01 made the extra claim "New Guys", so the real
+// episode looked present and was never fetched. Better unplaced than wrong.
+Debug.Assert(!FileNameParser.Parse("The Office S09X01 Retrospective.mp4").IsTvShow);
+Debug.Assert(!FileNameParser.Parse("Shaun the Sheep S04X01 The Farmer's Llamas (2015 360p re-blurip).mp4").IsTvShow);
+// ...while the lowercase x stays the season-episode separator it always was
+Debug.Assert(FileNameParser.Parse("The Wire [1x07] One Arrest.mkv").Season == 1);
+Debug.Assert(FileNameParser.Parse("The Wire [1x07] One Arrest.mkv").Episode == 7);
+Debug.Assert(FileNameParser.Parse("Superman The Animated Series - 2x06 #19 - Identity Crisis.avi").Episode == 6);
+
 // Season-less shows numbered "E01" index as season 1 rather than not at all.
 Debug.Assert(FileNameParser.Parse("Mr. Bean E01 Mr. Bean.mp4").Season == 1);
 Debug.Assert(FileNameParser.Parse("Mr. Bean E01 Mr. Bean.mp4").Episode == 1);

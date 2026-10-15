@@ -86,6 +86,14 @@ public static partial class FileNameParser
             {
                 info.Season = 1;
                 info.Episode = int.Parse(epMatch.Groups[1].Value);
+
+                if (epMatch.Groups.Count > 2 && epMatch.Groups[2].Success)
+                {
+                    var end = int.Parse(epMatch.Groups[2].Value);
+                    if (end > info.Episode && end - info.Episode <= MaxEpisodeSpan)
+                        info.EpisodeEnd = end;
+                }
+
                 baseName = baseName[..epMatch.Index];
             }
         }
@@ -279,7 +287,11 @@ public static partial class FileNameParser
     [GeneratedRegex(@"S(\d{1,2})\s+E(\d{1,3})", RegexOptions.IgnoreCase)]
     private static partial Regex SeasonEpisodeRegex2();
 
-    [GeneratedRegex(@"S(\d{1,2})x(\d{1,3})", RegexOptions.IgnoreCase)]
+    // Case-sensitive on purpose. An uppercase "S09X01" is how the shorts and webisodes in this
+    // library are named ("The Office S09X01 Retrospective"), and reading it as S09E01 made the
+    // extra claim a real episode — "New Guys" then looked present and was never downloaded.
+    // Lowercase "S01x01" stays the season-episode separator it has always been.
+    [GeneratedRegex(@"S(\d{1,2})x(\d{1,3})")]
     private static partial Regex SeasonEpisodeRegex3();
 
     [GeneratedRegex(@"(\d{1,2})x(\d{2,3})")]
@@ -291,7 +303,9 @@ public static partial class FileNameParser
     [GeneratedRegex(@"Season\s*(\d{1,2})\s*Episode\s*(\d{1,3})", RegexOptions.IgnoreCase)]
     private static partial Regex SeasonEpisodeRegex6();
 
-    [GeneratedRegex(@"Ep\.?\s*(\d{1,3})(?:\s*[-–]\s*\d+)?", RegexOptions.IgnoreCase)]
+    // "PLANET SHEEN - Ep. 02-03 - ..." is a paired file in the same sense as "S13E01E02",
+    // so the closing number is captured rather than matched and discarded.
+    [GeneratedRegex(@"Ep\.?\s*(\d{1,3})(?:\s*[-–]\s*(\d{1,3})(?![\dA-Za-z,]))?", RegexOptions.IgnoreCase)]
     private static partial Regex EpisodeOnlyRegex();
 
     // Season-less shows numbered "E01" with no "p" ("Mr. Bean E01 Mr. Bean", "Shaun the
