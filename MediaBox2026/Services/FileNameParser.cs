@@ -60,9 +60,12 @@ public static partial class FileNameParser
 
                 // Only SeasonEpisodeRegex1 carries the optional second number ("S13E01E02"):
                 // one file, two aired episodes. Keep the span — see ParsedMediaInfo.EpisodeEnd.
-                if (match.Groups.Count > 3 && match.Groups[3].Success)
+                var endGroup = match.Groups.Count > 3 && match.Groups[3].Success ? match.Groups[3]
+                             : match.Groups.Count > 4 && match.Groups[4].Success ? match.Groups[4]
+                             : null;
+                if (endGroup is not null)
                 {
-                    var end = int.Parse(match.Groups[3].Value);
+                    var end = int.Parse(endGroup.Value);
                     // A pair or a short run is real; a wide span is a mis-parse, not a multi-episode file.
                     if (end > info.Episode && end - info.Episode <= MaxEpisodeSpan)
                         info.EpisodeEnd = end;
@@ -76,6 +79,9 @@ public static partial class FileNameParser
         if (!info.Season.HasValue)
         {
             var epMatch = EpisodeOnlyRegex().Match(baseName);
+            if (!epMatch.Success)
+                epMatch = BareEpisodeRegex().Match(baseName);
+
             if (epMatch.Success)
             {
                 info.Season = 1;
@@ -225,21 +231,12 @@ public static partial class FileNameParser
     }
 
     /// <summary>
-    /// Words a formulaic kids' show repeats every week. They carry no identity, so they are
-    /// dropped before two episode titles are compared — "Pups Save the X" vs "Pups Save the Y"
-    /// would otherwise look 60% alike on boilerplate alone.
-    /// </summary>
-    private static readonly HashSet<string> EpisodeTitleStopWords = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "pups", "pup", "save", "saves", "saved", "stop", "stops", "the", "a", "an", "and",
-        "to", "of", "in", "on", "at", "vs", "air", "fire", "rescue", "search", "wheels"
-    };
-
-    /// <summary>
-    /// The distinctive words of the episode title(s) a release names — the text between the
-    /// SxxExx tag and the quality tag. Trackers renumber paired releases (the same two segments
-    /// posted as S13E11E12 and again as S13E12E13), so the numbers cannot tell a duplicate from
-    /// new content; the titles can. Empty when the name carries no title to compare.
+    /// The words of the episode title(s) a release names — the text between the SxxExx tag and
+    /// the quality tag. Which of them actually carry identity is decided by the caller against
+    /// the rest of the show (see MediaCatalogService), not by a word list here: "pups" and
+    /// "save" are filler in PAW Patrol and "torrentgalaxy" is filler in Reacher, and no fixed
+    /// list would know either. Single digits are kept — they are what separates "Pt 1" from
+    /// "Pt 2". Empty when the name carries no SxxExx tag to measure from.
     /// </summary>
     public static HashSet<string> EpisodeTitleTokens(string fileName)
     {
@@ -255,9 +252,7 @@ public static partial class FileNameParser
         if (quality.Success) title = title[..quality.Index];
 
         return PunctuationRegex().Split(title)
-            .Where(w => w.Length >= 2
-                        && !EpisodeTitleStopWords.Contains(w)
-                        && !w.All(char.IsDigit))
+            .Where(w => w.Length > 0)
             .Select(w => w.ToLowerInvariant())
             .ToHashSet();
     }
@@ -268,9 +263,17 @@ public static partial class FileNameParser
     [GeneratedRegex(@"\b(\d{3,4})p\b", RegexOptions.IgnoreCase)]
     private static partial Regex QualityRegex();
 
-    // The trailing group is optional and the literal "E" is mandatory: without it,
-    // "Paw.Patrol.S08E29.720p" would read 720 as the closing episode number.
-    [GeneratedRegex(@"S(\d{1,2})E(\d{1,3})(?:[-._\s]*E(\d{1,3}))?", RegexOptions.IgnoreCase)]
+    // Two optional closing groups for a paired release.
+    //
+    // Group 3 is the E-prefixed form: "S13E01E02", "S12E04-E05", "S04E01+E02".
+    //
+    // Group 4 is the bare form, "S10E17-18" and "S05E21 & 22", and it demands an explicit "-"
+    // or "&" because whitespace alone is not a range marker — an episode whose TITLE opens with
+    // a number ("S05E04 6,741", "S03E14 20,000 Leaks Under the City") would otherwise swallow it
+    // and claim episodes it does not have, which silently suppresses their download. The closing
+    // number also may not be followed by a digit, letter or comma, ruling out "-720p", "-4K",
+    // "-2CH" and thousands separators.
+    [GeneratedRegex(@"S(\d{1,2})E(\d{1,3})(?:[-._+\s]*E(\d{1,3})|\s*[-&]\s*(\d{1,2})(?![\dA-Za-z,]))?", RegexOptions.IgnoreCase)]
     private static partial Regex SeasonEpisodeRegex1();
 
     [GeneratedRegex(@"S(\d{1,2})\s+E(\d{1,3})", RegexOptions.IgnoreCase)]
@@ -290,6 +293,12 @@ public static partial class FileNameParser
 
     [GeneratedRegex(@"Ep\.?\s*(\d{1,3})(?:\s*[-–]\s*\d+)?", RegexOptions.IgnoreCase)]
     private static partial Regex EpisodeOnlyRegex();
+
+    // Season-less shows numbered "E01" with no "p" ("Mr. Bean E01 Mr. Bean", "Shaun the
+    // Sheep Championsheeps E01 The Relay"). Tried only after everything else has failed, and
+    // the boundaries keep it off mid-word matches like the "e7" in "Se7en".
+    [GeneratedRegex(@"(?<![A-Za-z0-9])E(\d{1,3})(?![A-Za-z0-9])", RegexOptions.IgnoreCase)]
+    private static partial Regex BareEpisodeRegex();
 
     [GeneratedRegex(@"[\s\.\(\[]((?:19|20)\d{2})[\s\.\)\]]")]
     private static partial Regex YearRegex();

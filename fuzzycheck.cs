@@ -94,28 +94,74 @@ Debug.Assert(FileNameParser.Parse("Show.S01E01E99.720p.mkv").EpisodeEnd == null)
 // the span must not leak into the show name
 Debug.Assert(FileNameParser.Parse("Paw Patrol S13E01E02 Pups Solve a Snap-N-Wrap Problem 1080p.mkv").CleanName == "Paw Patrol");
 
-// Renumbered duplicate detection works on the episode titles, because the numbers move:
-// EZTV posted the Woodland Walrus / DJ in a Jam pair as S13E11E12, then again as S13E12E13,
-// and the second post read as new content and downloaded a file already on disk.
-var onDisk = FileNameParser.EpisodeTitleTokens("Paw Patrol S13E11E12 Pups Save a Woodland Walrus Pups Save a DJ in a Jam 720p AMZN WEB-DL DDP5 1 H 264-LAZY[EZTVx.to].mkv");
-var repost = FileNameParser.EpisodeTitleTokens("Paw Patrol S13E12E13 Pups Save a Woodland Walrus - Pups Save a DJ in a Jam 1080p AMZN WEB-DL DDP5 1 H 264-LAZY[EZTVx.to].mkv");
-Debug.Assert(onDisk.SetEquals(repost));                       // same content, different numbers
-Debug.Assert(onDisk.Contains("walrus") && onDisk.Contains("woodland") && onDisk.Contains("jam"));
-Debug.Assert(!onDisk.Contains("pups") && !onDisk.Contains("save"));   // boilerplate carries no identity
-Debug.Assert(!onDisk.Contains("720p") && !onDisk.Contains("amzn") && !onDisk.Contains("lazy")); // nor does metadata
+// Multi-episode separators seen in this library: "E01E02", "E01-E02", "E01+E02",
+// bare "E17-18" and "E21 & 22".
+Debug.Assert(FileNameParser.Parse("The Office S04E01+E02 Fun Run.mp4").EpisodeEnd == 2);
+Debug.Assert(FileNameParser.Parse("Friends.S10E17-18.The.Last.One.720p.BluRay.mkv").EpisodeEnd == 18);
+Debug.Assert(FileNameParser.Parse("Teenage Mutant Ninja Turtles S05E21 & 22 Planet of the Turtleoids.mkv").EpisodeEnd == 22);
+Debug.Assert(FileNameParser.Parse("Spidey.and.His.Amazing.Friends.S04E15-E16.Mixing.Up.Trouble.mkv").EpisodeEnd == 16);
 
-// A genuinely new pair must not look like anything on disk.
-var fresh = FileNameParser.EpisodeTitleTokens("Paw Patrol S13E03E04 Pups Save the Orienteers - Pups Save Teatime 1080p AMZN WEB-DL.mkv");
-Debug.Assert(fresh.Intersect(onDisk).Count() == 0);
-// ...and two different "Pups Save the X" titles must not collide on their shared boilerplate.
-var other = FileNameParser.EpisodeTitleTokens("Paw Patrol S13E07E08 Pups Save a Hum-Kicker - Pups Save the One-Man Band 1080p.mkv");
-Debug.Assert(fresh.Intersect(other).Count() == 0);
+// An episode whose TITLE opens with a number must stay single. Whitespace is not a range
+// marker, and claiming episodes that aren't there suppresses their download for good.
+Debug.Assert(FileNameParser.Parse("Person of Interest S05E04 6,741.mp4").EpisodeEnd == null);
+Debug.Assert(FileNameParser.Parse("Teenage Mutant Ninja Turtles S03E14 20,000 Leaks Under the City.mkv").EpisodeEnd == null);
+Debug.Assert(FileNameParser.Parse("The Jetsons S03E03 9 to 5 to 9.mp4").EpisodeEnd == null);
+Debug.Assert(FileNameParser.Parse("How I Met Your Mother S07E14 46 Minutes.mp4").EpisodeEnd == null);
+Debug.Assert(FileNameParser.Parse("New Girl S05E14 300 Feet.mkv").EpisodeEnd == null);
+// nor may a resolution, 4K or channel-count tag be read as the closing episode
+Debug.Assert(FileNameParser.Parse("Paw.Patrol.S08E29.720p.NF.WEBRip.mkv").EpisodeEnd == null);
+Debug.Assert(FileNameParser.Parse("Show.S01E05-2160p.WEB.mkv").EpisodeEnd == null);
+Debug.Assert(FileNameParser.Parse("Show.S01E05-4K.WEB.mkv").EpisodeEnd == null);
+Debug.Assert(FileNameParser.Parse("Show.S01E05-2CH.x265.mkv").EpisodeEnd == null);
 
-// A re-post of one half of a pair already on disk is a subset of it, not new content.
-var half = FileNameParser.EpisodeTitleTokens("Paw Patrol S13E11 Pups Save a Woodland Walrus 1080p AMZN WEB-DL.mkv");
-Debug.Assert(half.IsSubsetOf(onDisk) && !half.SetEquals(onDisk));
+// Season-less shows numbered "E01" index as season 1 rather than not at all.
+Debug.Assert(FileNameParser.Parse("Mr. Bean E01 Mr. Bean.mp4").Season == 1);
+Debug.Assert(FileNameParser.Parse("Mr. Bean E01 Mr. Bean.mp4").Episode == 1);
+Debug.Assert(FileNameParser.Parse("Shaun the Sheep Championsheeps E01 The Relay.mp4").Episode == 1);
+// but a bare E must not be read out of the middle of a word, nor turn a film into an episode
+Debug.Assert(!FileNameParser.Parse("Se7en.1995.1080p.BluRay.mkv").IsTvShow);
+Debug.Assert(!FileNameParser.Parse("Mr Bean Animated Series - Art Thief.mp4").IsTvShow);
+Debug.Assert(!FileNameParser.Parse("The SpongeBob Musical Live on Stage (2019 360p re-webrip).mp4").IsTvShow);
 
-// A name with no SxxExx tag has no title to compare — callers must fall back to the numbers.
+// Title tokens keep digits, so "Pt 1" and "Pt 2" are not the same episode. They also carry no
+// word list: what counts as filler is decided per show by MediaCatalogService.
+var pt1 = FileNameParser.EpisodeTitleTokens("How I Met Your Mother S08E11 The Final Page Pt 1.mp4");
+var pt2 = FileNameParser.EpisodeTitleTokens("How I Met Your Mother S08E12 The Final Page Pt 2.mp4");
+Debug.Assert(pt1.Contains("1") && pt2.Contains("2") && !pt1.SetEquals(pt2));
+
+// Same two segments, numbers shifted by the tracker: the titles are identical.
+var onDisk = FileNameParser.EpisodeTitleTokens("Paw Patrol S13E11E12 Pups Save a Woodland Walrus Pups Save a DJ in a Jam 720p AMZN WEB-DL.mkv");
+var repost = FileNameParser.EpisodeTitleTokens("Paw Patrol S13E12E13 Pups Save a Woodland Walrus - Pups Save a DJ in a Jam 1080p AMZN WEB-DL.mkv");
+Debug.Assert(onDisk.SetEquals(repost));
+Debug.Assert(!onDisk.Contains("720p") && !onDisk.Contains("amzn"));          // metadata is cut at the quality tag
+var fresh = FileNameParser.EpisodeTitleTokens("Paw Patrol S13E03E04 Pups Save the Orienteers - Pups Save Teatime 1080p.mkv");
+Debug.Assert(!fresh.SetEquals(onDisk) && !fresh.IsSubsetOf(onDisk) && !onDisk.IsSubsetOf(fresh));
+Debug.Assert(onDisk.Contains("walrus") && onDisk.Contains("woodland") && !onDisk.Contains("orienteers"));
+Debug.Assert(fresh.Contains("orienteers") && fresh.Contains("teatime") && !fresh.Contains("walrus"));
+
+// Filler is whatever a show repeats on most of its own files -- no word list decides it.
+// In PAW Patrol that is the title formula; in Reacher it is the release group.
+var paw = new MediaBox2026.Models.TvShow { Name = "Paw Patrol", Episodes = [
+    new() { Season = 13, Episode = 1,  FileName = "Paw Patrol S13E01E02 Pups Save the Snap - Pups Save Helga 720p.mkv" },
+    new() { Season = 13, Episode = 3,  FileName = "Paw Patrol S13E03E04 Pups Save the Orienteers - Pups Save Teatime 720p.mkv" },
+    new() { Season = 13, Episode = 11, FileName = "Paw Patrol S13E11E12 Pups Save a Woodland Walrus Pups Save a DJ in a Jam 720p.mkv" },
+    new() { Season = 13, Episode = 5,  FileName = "Paw Patrol S13E05E06 Pups Save the Alien - Pups Save a Duckling 720p.mkv" },
+]};
+var pawFiller = MediaCatalogService.ShowFillerWords(paw);
+Debug.Assert(pawFiller.Contains("pups") && pawFiller.Contains("save"));      // the formula
+Debug.Assert(!pawFiller.Contains("walrus") && !pawFiller.Contains("teatime")); // the identity
+
+var reacher = new MediaBox2026.Models.TvShow { Name = "Reacher", Episodes = [
+    new() { Season = 3, Episode = 1, FileName = "Reacher.S03E01.WEB.x264-TORRENTGALAXY.mkv" },
+    new() { Season = 3, Episode = 2, FileName = "Reacher.S03E02.WEB.x264-TORRENTGALAXY.mkv" },
+    new() { Season = 3, Episode = 3, FileName = "Reacher.S03E03.WEB.x264-TORRENTGALAXY.mkv" },
+]};
+var reacherFiller = MediaCatalogService.ShowFillerWords(reacher);
+// titleless releases: every word is filler, so nothing is left to call a duplicate on
+Debug.Assert(reacherFiller.Contains("torrentgalaxy") && reacherFiller.Contains("web"));
+Debug.Assert(FileNameParser.EpisodeTitleTokens("Reacher.S03E04.WEB.x264-TORRENTGALAXY.mkv")
+             .Except(reacherFiller).Count() < 2);
+// a name with no SxxExx tag has nothing to measure
 Debug.Assert(FileNameParser.EpisodeTitleTokens("Paw Patrol Season 13 Complete 1080p.mkv").Count == 0);
 
 Console.WriteLine("ok");

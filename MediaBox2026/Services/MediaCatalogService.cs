@@ -565,45 +565,87 @@ public class MediaCatalogService(
     private const double TitleDuplicateThreshold = 0.85;
 
     /// <summary>
-    /// Does a file already on disk carry the same episode title(s) as this release? Trackers
-    /// renumber paired releases — the Woodland Walrus / DJ in a Jam pair was posted as S13E11E12
-    /// and again as S13E12E13 — so an episode-number check reads the second post as new content
-    /// and fetches a file that is already there. The titles are what stay the same.
+    /// Is this release the same content as a file already on disk, posted under shifted episode
+    /// numbers? The Woodland Walrus / DJ in a Jam pair arrived as S13E11E12 and was posted again
+    /// as S13E12E13, which a number check reads as new content and downloads over.
     ///
-    /// A single release whose title sits wholly inside a pair on disk counts too: a re-post of one
-    /// half of "Woodland Walrus and DJ in a Jam" is already covered by that file.
+    /// Two things must both hold, and the span overlap is the one doing the safety work:
+    ///
+    /// 1. The release's span must overlap an episode already held. Episodes with no number in
+    ///    common are never compared, which is what keeps multi-part titles apart — "The Final
+    ///    Page Pt 1" and "Pt 2" are E11 and E12, so they never meet here. Across this library
+    ///    the overlap requirement alone removes every false positive the titles produce.
+    /// 2. Their distinctive title words must agree. Distinctive is measured against the rest of
+    ///    the show rather than a fixed word list: a word in more than a third of the show's
+    ///    filenames is that show's filler, which catches "pups"/"save" in PAW Patrol and
+    ///    "web"/"x264"/"torrentgalaxy" in Reacher without naming either. When too little is
+    ///    left on either side to judge — a release named with no title at all — this abstains
+    ///    and the episode numbers decide alone.
     /// </summary>
-    public bool HasEpisodeTitle(string showName, int season, string releaseTitle)
+    public bool IsRenumberedDuplicate(string showName, int season, int episode, int? episodeEnd, string releaseTitle)
     {
-        var releaseTokens = FileNameParser.EpisodeTitleTokens(releaseTitle);
+        var match = MatchShowForEpisode(showName, null);
+        if (match == null || match.Episodes.Count == 0) return false;
 
-        // One distinctive word is too thin to judge on — let the number checks decide.
+        var last = Math.Max(episodeEnd ?? episode, episode);
+
+        var overlapping = match.Episodes
+            .Where(e => e.Season == season && e.Episode >= episode && e.Episode <= last)
+            .Select(e => e.FileName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (overlapping.Count == 0) return false;
+
+        var filler = ShowFillerWords(match);
+
+        var releaseTokens = FileNameParser.EpisodeTitleTokens(releaseTitle);
+        releaseTokens.ExceptWith(filler);
         if (releaseTokens.Count < 2) return false;
 
-        var match = MatchShowForEpisode(showName, null);
-        if (match == null) return false;
-
-        foreach (var fileName in match.Episodes
-                     .Where(e => e.Season == season)
-                     .Select(e => e.FileName)
-                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var fileName in overlapping)
         {
             var fileTokens = FileNameParser.EpisodeTitleTokens(fileName);
+            fileTokens.ExceptWith(filler);
             if (fileTokens.Count < 2) continue;
 
             var similarity = (double)releaseTokens.Intersect(fileTokens).Count()
                              / releaseTokens.Union(fileTokens).Count();
 
-            if (similarity >= TitleDuplicateThreshold || releaseTokens.IsSubsetOf(fileTokens))
+            if (similarity >= TitleDuplicateThreshold
+                || releaseTokens.IsSubsetOf(fileTokens)
+                || fileTokens.IsSubsetOf(releaseTokens))
             {
                 logger.LogInformation(
-                    "🔁 Release names episode(s) already on disk (similarity {Similarity:F2}): '{Release}' matches '{File}'",
+                    "🔁 Renumbered duplicate (title similarity {Similarity:F2}): '{Release}' is already on disk as '{File}'",
                     similarity, releaseTitle, fileName);
                 return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Words that appear in more than a third of a show's episode filenames. Whatever a show
+    /// repeats on most of its files is its own boilerplate — release group, source, codec, or a
+    /// title formula — and carries no identity, so it is derived per show rather than listed.
+    /// </summary>
+    public static HashSet<string> ShowFillerWords(TvShow show)
+    {
+        var fileNames = show.Episodes
+            .Select(e => e.FileName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var frequency = new Dictionary<string, int>();
+        foreach (var name in fileNames)
+            foreach (var token in FileNameParser.EpisodeTitleTokens(name))
+                frequency[token] = frequency.GetValueOrDefault(token) + 1;
+
+        // At least 3, so a show with a handful of files keeps its titles.
+        var limit = Math.Max(2, fileNames.Count * 3 / 10);
+        return frequency.Where(kv => kv.Value > limit).Select(kv => kv.Key).ToHashSet();
     }
 
     /// <summary>

@@ -214,9 +214,10 @@ public class RssFeedMonitorService(
                 }
 
                 // Numbers can lie: the same two segments get posted under different episode
-                // numbers (S13E11E12, then S13E12E13), which the check above reads as new
-                // content. The titles don't move, so they are the last word on duplicates.
-                if (catalog.HasEpisodeTitle(parsed.CleanName, parsed.Season.Value, title))
+                // numbers (S13E11E12, then S13E12E13), so the check above sees a span it does
+                // not fully hold and reads it as new. A release that overlaps what is on disk
+                // and names the same titles is that file again, not new content.
+                if (catalog.IsRenumberedDuplicate(parsed.CleanName, parsed.Season.Value, parsed.Episode!.Value, parsed.EpisodeEnd, title))
                 {
                     logger.LogInformation("Skipping renumbered duplicate: {Title}", title);
                     MarkProcessed(guid, title);
