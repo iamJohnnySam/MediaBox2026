@@ -37,7 +37,9 @@ VIDEO = {'.mkv', '.mp4', '.avi', '.m4v', '.webm', '.flv', '.ts', '.mov', '.mpg',
 TAG  = re.compile(r'(?i)S(\d{1,2})E(\d{1,3})(?:[-._+\s]*E(\d{1,3})|\s*[-&]\s*(\d{1,2})(?![\dA-Za-z,]))?')
 EPONLY = re.compile(r'(?i)Ep\.?\s*(\d{1,3})(?:\s*[-–]\s*(\d{1,3})(?![\dA-Za-z,]))?')
 SEG  = re.compile(r'(?i)S\d{1,2}E\d{1,3}[a-f](?![A-Za-z0-9])')
-XTRA = re.compile(r'S(\d{1,2})X(\d{1,3})(?![A-Za-z0-9])')          # case-sensitive, as the parser is
+# Case-sensitive, as the parser is. Both forms appear: "S09X01" standalone, and "S07E17X01"
+# hanging off the episode the extra belongs to.
+XTRA = re.compile(r'S(\d{1,2})(?:E\d{1,3})?X(\d{1,3})(?![A-Za-z0-9])')
 QUAL = re.compile(r'(?i)\b(\d{3,4})p\b')
 MAX_SPAN = 10
 
@@ -182,11 +184,14 @@ def main():
             skipped_mixed.append((key, entries))
             continue
 
-        rows.append((key, keep, drop, identical))
+        note = ''
+        if keep[1] is None and any(r for _, r, _ in drop):
+            note = '  [CHECK: the copy being dropped advertises a resolution, the kept one does not]'
+        rows.append((key, keep, drop, identical, note))
         freed += sum(sz for sz, _, _ in drop)
 
-    for (show, s, ep), keep, drop, identical in rows:
-        print(f"{show} S{s:02d}E{ep:02d}" + ("   [byte-identical]" if identical else ""))
+    for (show, s, ep), keep, drop, identical, note in rows:
+        print(f"{show} S{s:02d}E{ep:02d}" + ("   [byte-identical]" if identical else "") + note)
         print(f"   keep  {keep[0]/2**20:7.0f} MB  {os.path.basename(keep[2])}")
         for sz, _, p in drop:
             print(f"   DROP  {sz/2**20:7.0f} MB  {os.path.basename(p)}")
@@ -217,7 +222,7 @@ def main():
         return
 
     removed = 0
-    for _, _, drop, _ in rows:
+    for _, _, drop, _, _ in rows:
         for _, _, p in drop:
             for sc in sidecars(p):
                 if os.path.isdir(sc):
