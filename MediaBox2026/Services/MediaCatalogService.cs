@@ -414,19 +414,17 @@ public class MediaCatalogService(
         // that exist, so its stale TvShows row survives and HasEpisode keeps returning true.
         if (show.Episodes.Count == 0) return;
 
-        var stillHere = show.Episodes.Select(e => (e.Season, e.Episode)).ToHashSet();
-        var removed = previousEpisodes.Where(kv => !stillHere.Contains(kv.Key));
+        var (gone, moved) = ClassifyRemovedEpisodes(
+            previousEpisodes,
+            show.Episodes.Select(e => (e.Season, e.Episode)),
+            allFileNamesInLibrary);
 
-        foreach (var ((season, episode), fileName) in removed)
+        foreach (var ((season, episode), fileName) in moved)
+            logger.LogInformation("↪️ Episode moved elsewhere in the library, not tombstoned: {Show} S{Season}E{Episode} ({File})",
+                show.Name, season, episode, fileName);
+
+        foreach (var (season, episode) in gone)
         {
-            // The file is still in the library, just under a different show — a reorganisation,
-            // not a deletion. Tombstoning it would stop the show it left ever filling the gap.
-            if (!string.IsNullOrEmpty(fileName) && allFileNamesInLibrary.Contains(fileName))
-            {
-                logger.LogInformation("↪️ Episode moved elsewhere in the library, not tombstoned: {Show} S{Season}E{Episode} ({File})",
-                    show.Name, season, episode, fileName);
-                continue;
-            }
 
             // ponytail: exact name match, same as the RSS monitor's own dispatched lookup —
             // fuzzy matching here would only help if the two ever disagree, which they don't
@@ -446,6 +444,37 @@ public class MediaCatalogService(
             logger.LogInformation("🪦 Episode deleted from disk, tombstoned so it won't re-download: {Show} S{Season}E{Episode}",
                 show.Name, season, episode);
         }
+    }
+
+    /// <summary>
+    /// Splits the episodes a show no longer has into the ones genuinely gone from disk and the
+    /// ones whose file is still in the library under some other show. Only the first kind is a
+    /// deletion; the second is a reorganisation, and tombstoning it would stop the show it left
+    /// from ever filling the gap. Pure so the distinction can be checked without a library.
+    /// </summary>
+    public static (List<(int Season, int Episode)> Gone,
+                  List<((int Season, int Episode) Key, string FileName)> Moved)
+        ClassifyRemovedEpisodes(
+            Dictionary<(int Season, int Episode), string> previousEpisodes,
+            IEnumerable<(int Season, int Episode)> currentEpisodes,
+            HashSet<string> allFileNamesInLibrary)
+    {
+        var stillHere = currentEpisodes.ToHashSet();
+        var gone = new List<(int, int)>();
+        var moved = new List<((int, int), string)>();
+
+        foreach (var kv in previousEpisodes)
+        {
+            if (stillHere.Contains(kv.Key))
+                continue;
+
+            if (!string.IsNullOrEmpty(kv.Value) && allFileNamesInLibrary.Contains(kv.Value))
+                moved.Add((kv.Key, kv.Value));
+            else
+                gone.Add(kv.Key);
+        }
+
+        return (gone, moved);
     }
 
     /// <summary>

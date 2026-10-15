@@ -179,4 +179,39 @@ Debug.Assert(FileNameParser.EpisodeTitleTokens("Reacher.S03E04.WEB.x264-TORRENTG
 // a name with no SxxExx tag has nothing to measure
 Debug.Assert(FileNameParser.EpisodeTitleTokens("Paw Patrol Season 13 Complete 1080p.mkv").Count == 0);
 
+// An episode gone from a show's folder is only a deletion if its file has left the library.
+// Splitting Planet Sheen out of Jimmy Neutron wrote 18 tombstones that each said "never
+// re-download" about an episode that had merely been filed under the show it belongs to.
+{
+    var previous = new Dictionary<(int, int), string>
+    {
+        [(1, 34)] = "PLANET SHEEN - Ep. 34-35 - Scape Doat and Haute CuiSheen (720p - Web-DL).mp4",
+        [(1, 50)] = "PLANET SHEEN - Ep. 50 - Banana Quest (720p - Web-DL).mp4",
+        [(1, 2)]  = "JIMMY NEUTRON - S01 E02 - Normal Boy (576p - DVDRip).mp4",
+        [(1, 3)]  = "JIMMY NEUTRON - S01 E03 - Birth of a Salesman (576p - DVDRip).mp4",
+    };
+    // E03 is still in this folder; the two Planet Sheen files moved to their own show; E02 was
+    // genuinely deleted.
+    var current = new[] { (1, 3) };
+    var library = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "PLANET SHEEN - Ep. 34-35 - Scape Doat and Haute CuiSheen (720p - Web-DL).mp4",
+        "PLANET SHEEN - Ep. 50 - Banana Quest (720p - Web-DL).mp4",
+        "JIMMY NEUTRON - S01 E03 - Birth of a Salesman (576p - DVDRip).mp4",
+    };
+
+    var (gone, moved) = MediaCatalogService.ClassifyRemovedEpisodes(previous, current, library);
+
+    Debug.Assert(gone.Count == 1 && gone[0] == (1, 2));            // the only real deletion
+    Debug.Assert(moved.Count == 2);                                 // both relocated, not tombstoned
+    Debug.Assert(moved.All(m => m.FileName.StartsWith("PLANET SHEEN")));
+    Debug.Assert(!gone.Contains((1, 3)));                           // still on disk, untouched
+    Debug.Assert(!gone.Contains((1, 34)) && !gone.Contains((1, 50)));
+
+    // With nothing moved, every absence is a deletion -- the behaviour this guard must not lose.
+    var (allGone, noneMoved) = MediaCatalogService.ClassifyRemovedEpisodes(
+        previous, Array.Empty<(int, int)>(), []);
+    Debug.Assert(allGone.Count == 4 && noneMoved.Count == 0);
+}
+
 Console.WriteLine("ok");
