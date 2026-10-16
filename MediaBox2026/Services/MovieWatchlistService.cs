@@ -181,18 +181,40 @@ public class MovieWatchlistService(
                 YtsResult? bestMatch = null;   // acceptable quality — take it without asking
                 YtsResult? highMatch = null;   // above standard — goes through the wait/approve clock
                 var matchCount = 0;
-                foreach (var movie in movies.EnumerateArray())
+
+                // Best-scoring title first. Taking the first result over the threshold let YTS's
+                // result order decide the film: a review-show episode merely prefixing the wanted
+                // title scores 0.90 by the containment rule, so it beat the film itself to the
+                // break below. Ordering is stable, so equal scores keep YTS's own ranking.
+                var ranked = movies.EnumerateArray()
+                    .Select(movie =>
+                    {
+                        var title = movie.GetProperty("title").GetString() ?? "";
+                        return (Movie: movie, Title: title,
+                                Year: movie.GetProperty("year").GetInt32(),
+                                Score: FileNameParser.FuzzyMatch(title, item.Name));
+                    })
+                    .OrderByDescending(c => c.Score)
+                    .ToList();
+
+                foreach (var (movie, title, year, score) in ranked)
                 {
-                    var title = movie.GetProperty("title").GetString() ?? "";
-                    var year = movie.GetProperty("year").GetInt32();
                     DateTime? uploaded = movie.TryGetProperty("date_uploaded_unix", out var du) && du.TryGetInt64(out var unix) && unix > 0
                         ? DateTimeOffset.FromUnixTimeSeconds(unix).UtcDateTime : null;
-                    var score = FileNameParser.FuzzyMatch(title, item.Name);
 
                     logger.LogDebug("Match score {Score:F2} for '{Title}' ({Year})", score, title, year);
 
                     if (score < 0.5) continue;
                     if (item.Year.HasValue && year != item.Year.Value) continue;
+
+                    // Containment alone is not identity here — a title carrying its own content
+                    // words is a different work, however much of the wanted name it repeats.
+                    if (FileNameParser.ExtraTitleWords(title, item.Name) is { Count: > 0 } extra)
+                    {
+                        logger.LogInformation("⏭️ Not '{Name}': '{Title}' ({Year}) adds {Extra}",
+                            item.Name, title, year, string.Join(", ", extra));
+                        continue;
+                    }
 
                     matchCount++;
 

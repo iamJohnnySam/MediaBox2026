@@ -222,6 +222,29 @@ public static partial class FileNameParser
             .Split(' ', StringSplitOptions.RemoveEmptyEntries)
             .ToHashSet();
 
+    /// <summary>Not identity: a leading article is the same work either way.</summary>
+    private static readonly HashSet<string> TitleArticles = ["the", "a", "an"];
+
+    /// <summary>
+    /// The content words <paramref name="candidate"/> adds to <paramref name="wanted"/>, ignoring
+    /// articles. Empty means the candidate names the same work.
+    ///
+    /// <see cref="FuzzyMatch"/> scores containment 0.90 in <i>either</i> direction, which is right
+    /// when filing a release against a library folder ("Ted" vs "Ted (2024)") and wrong when
+    /// choosing which release to <b>download</b>: a title that prefixes the wanted one with content
+    /// words is a different work. "Just Seen It The Twilight Saga- BReaking Dawn Part 1" is an
+    /// episode of a review show, not the film, and it scored 0.90 against the film's own name.
+    /// Articles stay excluded so a watchlist entry for "Good Dinosaur" still accepts YTS's
+    /// "The Good Dinosaur".
+    /// </summary>
+    public static HashSet<string> ExtraTitleWords(string candidate, string wanted)
+    {
+        var extra = Tokenize(candidate);
+        extra.ExceptWith(Tokenize(wanted));
+        extra.ExceptWith(TitleArticles);
+        return extra;
+    }
+
     public static double FuzzyMatch(string a, string b)
     {
         var setA = Tokenize(a);

@@ -31,6 +31,23 @@ Debug.Assert(FileNameParser.IsQualityAcceptable(null));  // unknown stays accept
 Debug.Assert(FileNameParser.FuzzyMatch("The Angry Birds Movie", "The Angry Birds Movie 2") > 0.6);
 Debug.Assert(FileNameParser.FuzzyMatch("The Good Dinosaur", "Good Dinosaur") > 0.6);
 
+// A release whose title prefixes the wanted one with content words is a DIFFERENT work, even
+// though containment scores it 0.90. This is what queued an episode of the review show
+// "Just Seen It" against a watchlist entry for Breaking Dawn Part 1.
+Debug.Assert(FileNameParser.FuzzyMatch(
+    "Just Seen It The Twilight Saga- BReaking Dawn Part 1", "The Twilight Saga: Breaking Dawn Part 1") > 0.5);
+Debug.Assert(FileNameParser.ExtraTitleWords(
+    "Just Seen It The Twilight Saga- BReaking Dawn Part 1", "The Twilight Saga: Breaking Dawn Part 1")
+    .SetEquals(["just", "seen", "it"]));
+// the film itself, punctuation and all, adds nothing
+Debug.Assert(FileNameParser.ExtraTitleWords(
+    "The Twilight Saga: Breaking Dawn - Part 1", "The Twilight Saga: Breaking Dawn Part 1").Count == 0);
+// articles are not identity -- a yearless "Good Dinosaur" entry must still accept YTS's title
+Debug.Assert(FileNameParser.ExtraTitleWords("The Good Dinosaur", "Good Dinosaur").Count == 0);
+// ...but a sequel or spin-off still has to be rejected
+Debug.Assert(FileNameParser.ExtraTitleWords("It Chapter Two", "It").SetEquals(["chapter", "two"]));
+Debug.Assert(FileNameParser.ExtraTitleWords("Alien: Romulus", "Alien").SetEquals(["romulus"]));
+
 // fallback picks the smallest above-standard release; "3D" sorts last
 Debug.Assert(MovieWatchlistService.Resolution("1080p") < MovieWatchlistService.Resolution("2160p"));
 Debug.Assert(MovieWatchlistService.Resolution("2160p") < MovieWatchlistService.Resolution("3D"));
